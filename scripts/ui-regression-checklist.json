@@ -1,0 +1,136 @@
+{
+  "name": "Journal Stream UI Regression",
+  "vaultRoot": "Set with ROAM_IN_OB_VAULT_ROOT",
+  "pluginId": "roam-in-ob",
+  "fixture": {
+    "prepare": "pnpm run fixture:ui",
+    "check": "pnpm run fixture:ui:check",
+    "clean": "pnpm run fixture:ui:clean",
+    "directory": "<vault>/Journal/_journal_stream_regression_fixture"
+  },
+  "cases": [
+    {
+      "id": "open-default-view",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Open Obsidian TASK vault with roam-in-ob enabled.",
+        "Run command Open Journal Stream.",
+        "Observe the main editor leaf."
+      ],
+      "evidence": [
+        "Main editor contains daily-note-editor-view.",
+        "View state has selectionMode=folder, target=Journal, timeField=journalDate, selectedRange=recent-30.",
+        "Fixture files 260812.md and 2026-08-11.md are visible in date order."
+      ],
+      "cleanup": []
+    },
+    {
+      "id": "settings-ui",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Open plugin settings for Journal Stream.",
+        "Change journalFolder, defaultOpenMode, initialRange, enableExportMarkdown.",
+        "Return to an already open Journal Stream view."
+      ],
+      "evidence": [
+        "Settings controls render without overlap.",
+        "Existing Journal Stream view reacts to settingsRevision.",
+        "Markdown export visibility matches settings."
+      ],
+      "cleanup": ["Restore default settings used by the PRD."]
+    },
+    {
+      "id": "preview-to-edit-save",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Open Journal Stream.",
+        "Focus the embedded editor for 260812.md.",
+        "Append a unique marker to the fixture file through the embedded editor.",
+        "Wait for Obsidian save.",
+        "Open the source fixture file directly."
+      ],
+      "evidence": [
+        "Card shows Saving... then Saved or source file hash changes.",
+        "Source file contains the unique marker.",
+        "The source file remains the truth after the embedded editor saves."
+      ],
+      "cleanup": ["pnpm run fixture:ui"]
+    },
+    {
+      "id": "copy-visible-markdown",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Open Journal Stream.",
+        "Ensure at least one fixture card is visible.",
+        "Trigger Copy Journal Stream as Markdown from the command palette."
+      ],
+      "evidence": [
+        "Clipboard contains # Journal Stream Export.",
+        "Clipboard includes source_path and date_source for visible fixture files.",
+        "Copy failed state is not shown for successful copy."
+      ],
+      "cleanup": []
+    },
+    {
+      "id": "external-change-reload",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Open Journal Stream with 260812.md mounted in the embedded editor.",
+        "Modify 260812.md externally outside the embedded editor.",
+        "Observe the card state."
+      ],
+      "evidence": [
+        "Card auto-syncs from the external Markdown source.",
+        "No conflict/reload prompt is shown for ordinary external source changes.",
+        "The embedded editor reloads from the Markdown truth source."
+      ],
+      "cleanup": ["pnpm run fixture:ui"]
+    },
+    {
+      "id": "rename-refresh",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Open Journal Stream.",
+        "Rename fixture 260812.md to 260812-renamed.png.",
+        "Rename it back to 260812.md.",
+        "Rename an adjacent non-Markdown file to 260814.md inside the fixture directory."
+      ],
+      "evidence": [
+        "Renamed .md to non-Markdown disappears from the Journal Stream.",
+        "Renamed file returning to .md appears again when it matches the source and range.",
+        "New Markdown rename enters the list without duplicating cards."
+      ],
+      "cleanup": ["pnpm run fixture:ui"]
+    },
+    {
+      "id": "bad-yaml-and-unparsed",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Open Journal Stream.",
+        "Inspect bad-yaml-260813.md and unparsed-fixture.md cards."
+      ],
+      "evidence": [
+        "Bad YAML does not break the whole view.",
+        "Unparsed file shows fallback metadata instead of crashing.",
+        "Other fixture cards remain editable."
+      ],
+      "cleanup": []
+    },
+    {
+      "id": "real-ui-performance",
+      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "steps": [
+        "Measure warm open time for default recent-30 Journal Stream.",
+        "Modify one visible fixture source file externally.",
+        "Measure modify-to-UI update latency."
+      ],
+      "evidence": [
+        "Small warm open <= 200ms where applicable.",
+        "Medium warm open <= 500ms where applicable.",
+        "Single-file modify-to-UI p95 <= 300ms.",
+        "Measurement method and viewport are recorded."
+      ],
+      "cleanup": ["pnpm run fixture:ui:clean"]
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+    "name": "roam-in-ob",
+    "version": "0.1.0",
+    "description": "Navigate and edit connected journal notes in a Roam-like stream.",
+    "main": "main.js",
+    "scripts": {
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix",
+        "dev": "npm run lint && vite build --watch --mode development",
+        "build": "npx svelte-check && vite build --mode production",
+        "test:journal": "node scripts/test-journal-core.mjs",
+        "bench:journal": "node scripts/bench-journal-core.mjs",
+        "install:check": "node scripts/check-install-state.mjs",
+        "completion:audit": "node scripts/completion-audit.mjs",
+        "fixture:ui": "node scripts/prepare-ui-fixture.mjs prepare",
+        "fixture:ui:check": "node scripts/check-ui-fixture.mjs",
+        "fixture:ui:clean": "node scripts/prepare-ui-fixture.mjs clean",
+        "ui:checklist": "node scripts/print-ui-regression-checklist.mjs",
+        "ui:checklist:json": "node scripts/print-ui-regression-checklist.mjs --json",
+        "ui:audit:request": "node scripts/request-ui-audit.mjs",
+        "ui:audit:wait": "node scripts/wait-ui-audit.mjs",
+        "ui:audit:validate": "node scripts/validate-ui-audit.mjs",
+        "ui:results:partial-from-audit": "node scripts/write-partial-ui-results-from-audit.mjs",
+        "ui:results:performance": "node scripts/write-performance-ui-result.mjs",
+        "ui:results:validate": "node scripts/validate-ui-regression-results.mjs",
+        "version": "node version-bump.mjs && git add manifest.json versions.json"
+    },
+    "keywords": [],
+    "author": "PkuLilBoat",
+    "devDependencies": {
+        "@eslint/js": "^9.39.5",
+        "@eslint/json": "0.14.0",
+        "@rollup/plugin-node-resolve": "^15.2.3",
+        "@rollup/plugin-replace": "^5.0.5",
+        "@rollup/plugin-terser": "^0.4.4",
+        "@sveltejs/vite-plugin-svelte": "^3.1.0",
+        "@tsconfig/svelte": "^5.0.4",
+        "@types/node": "^20.12.7",
+        "@typescript-eslint/eslint-plugin": "8.67.0",
+        "@typescript-eslint/parser": "8.67.0",
+        "builtin-modules": "3.3.0",
+        "esbuild": "0.14.47",
+        "eslint": "^9.39.5",
+        "eslint-plugin-obsidianmd": "0.4.1",
+        "eslint-plugin-svelte": "^3.23.0",
+        "obsidian": "^1.8.7",
+        "obsidian-daily-notes-interface": "^0.9.4",
+        "svelte": "^4.2.15",
+        "svelte-check": "3.7.1",
+        "svelte-eslint-parser": "^1.8.1",
+        "svelte-inview": "^4.0.2",
+        "svelte-preprocess": "^5.1.4",
+        "tslib": "2.4.0",
+        "typescript": "5.3.3",
+        "typescript-eslint": "^8.67.0",
+        "vite": "^5.2.10"
+    },
+    "dependencies": {
+        "@codemirror/state": "^6.5.2",
+        "@codemirror/view": "^6.36.3",
+        "monkey-around": "^2.3.0"
+    },
+    "packageManager": "pnpm@10.21.0+sha512.da3337267e400fdd3d479a6c68079ac6db01d8ca4f67572083e722775a796788a7a9956613749e000fac20d424b594f7a791a5f4e2e13581c5ef947f26968a40",
+    "pnpm": {
+        "overrides": {
+            "obsidian-daily-notes-interface>obsidian": "^1.8.7"
+        }
+    }
+}

@@ -1,0 +1,66 @@
+{
+  "checklist": "Journal Stream UI Regression",
+  "runAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
+  "operator": "computer-use",
+  "environment": {
+    "vaultRoot": "example-vault",
+    "pluginId": "roam-in-ob",
+    "obsidianVersion": "recorded-during-run",
+    "viewport": "recorded-during-run"
+  },
+  "cases": [
+    {
+      "id": "open-default-view",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": []
+    },
+    {
+      "id": "settings-ui",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": []
+    },
+    {
+      "id": "preview-to-edit-save",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": []
+    },
+    {
+      "id": "copy-visible-markdown",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": []
+    },
+    {
+      "id": "external-change-reload",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": []
+    },
+    {
+      "id": "rename-refresh",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": []
+    },
+    {
+      "id": "bad-yaml-and-unparsed",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": []
+    },
+    {
+      "id": "real-ui-performance",
+      "status": "pending",
+      "evidence": [],
+      "artifacts": [],
+      "metrics": {
+        "smallWarmOpenMs": null,
+        "mediumWarmOpenMs": null,
+        "modifyToUiP95Ms": null
+      }
+    }
+  ]
+}
