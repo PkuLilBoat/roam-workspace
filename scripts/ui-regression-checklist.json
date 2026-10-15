@@ -1,32 +1,32 @@
 {
   "name": "Journal Stream UI Regression",
-  "vaultRoot": "Set with ROAM_IN_OB_VAULT_ROOT",
-  "pluginId": "roam-in-ob",
+  "vaultRoot": "/Users/feng/Documents/OBSIDIAN/TEST",
+  "pluginId": "roam-workspace",
   "fixture": {
-    "prepare": "pnpm run fixture:ui",
-    "check": "pnpm run fixture:ui:check",
-    "clean": "pnpm run fixture:ui:clean",
-    "directory": "<vault>/Journal/_journal_stream_regression_fixture"
+    "prepare": "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui",
+    "check": "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check",
+    "clean": "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:clean",
+    "directory": "/Users/feng/Documents/OBSIDIAN/TEST/Journal/_journal_stream_regression_fixture"
   },
   "cases": [
     {
       "id": "open-default-view",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui", "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check"],
       "steps": [
-        "Open Obsidian TASK vault with roam-in-ob enabled.",
+        "Open Obsidian TEST vault with roam-workspace enabled.",
         "Run command Open Journal Stream.",
         "Observe the main editor leaf."
       ],
       "evidence": [
-        "Main editor contains daily-note-editor-view.",
+        "Main editor contains one daily-note-editor-view backed by Journal V2 and no temporary journal-v2-view leaf.",
         "View state has selectionMode=folder, target=Journal, timeField=journalDate, selectedRange=recent-30.",
-        "Fixture files 260812.md and 2026-08-11.md are visible in date order."
+        "After progressive scrolling reaches the end, fixture files 260812.md and 2026-08-11.md are both present in the rendered list in date order, with no pending cards."
       ],
       "cleanup": []
     },
     {
       "id": "settings-ui",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui", "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check"],
       "steps": [
         "Open plugin settings for Journal Stream.",
         "Change journalFolder, defaultOpenMode, initialRange, enableExportMarkdown.",
@@ -34,31 +34,35 @@
       ],
       "evidence": [
         "Settings controls render without overlap.",
-        "Existing Journal Stream view reacts to settingsRevision.",
-        "Markdown export visibility matches settings."
+        "Settings no longer expose a Legacy/V2 engine selector or migration rollout control.",
+        "Copy Journal stream as Markdown command availability matches enableExportMarkdown.",
+        "Temporary settings persist to data.json and cleanup restores the original bytes exactly."
       ],
       "cleanup": ["Restore default settings used by the PRD."]
     },
     {
       "id": "preview-to-edit-save",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui", "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check"],
       "steps": [
         "Open Journal Stream.",
-        "Focus the embedded editor for 260812.md.",
-        "Append a unique marker to the fixture file through the embedded editor.",
+        "Require the exact registered fixture Journal/_journal_stream_regression_fixture/260812.md; fail closed if it is absent.",
+        "Focus that fixture's persistent embedded editor and record its mount ID, geometry, and Properties state.",
+        "Append a runId-bound unique marker to the fixture through the embedded editor.",
         "Wait for Obsidian save.",
-        "Open the source fixture file directly."
+        "Exercise preview, expanded Properties, re-edit, and final preview using the same mounted editor.",
+        "In an unconditional cleanup transaction, restore the original source, embedded editor buffer, and Properties state."
       ],
       "evidence": [
-        "Card shows Saving... then Saved or source file hash changes.",
-        "Source file contains the unique marker.",
-        "The source file remains the truth after the embedded editor saves."
+        "The exact runId-bound marker reaches a larger source file through the embedded editor save path.",
+        "All edit/preview stages and post-cleanup state retain one editor mount ID with at most 1px geometry delta.",
+        "Cleanup is attempted even after a failed UI step and proves source bytes and embedded editor buffer exactly match the original.",
+        "The marker is absent from source and editor after cleanup, and the original Properties collapsed state is restored."
       ],
-      "cleanup": ["pnpm run fixture:ui"]
+      "cleanup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:clean"]
     },
     {
       "id": "copy-visible-markdown",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui", "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check"],
       "steps": [
         "Open Journal Stream.",
         "Ensure at least one fixture card is visible.",
@@ -73,7 +77,7 @@
     },
     {
       "id": "external-change-reload",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui", "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check"],
       "steps": [
         "Open Journal Stream with 260812.md mounted in the embedded editor.",
         "Modify 260812.md externally outside the embedded editor.",
@@ -84,11 +88,11 @@
         "No conflict/reload prompt is shown for ordinary external source changes.",
         "The embedded editor reloads from the Markdown truth source."
       ],
-      "cleanup": ["pnpm run fixture:ui"]
+      "cleanup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui"]
     },
     {
       "id": "rename-refresh",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui", "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check"],
       "steps": [
         "Open Journal Stream.",
         "Rename fixture 260812.md to 260812-renamed.png.",
@@ -100,11 +104,11 @@
         "Renamed file returning to .md appears again when it matches the source and range.",
         "New Markdown rename enters the list without duplicating cards."
       ],
-      "cleanup": ["pnpm run fixture:ui"]
+      "cleanup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui"]
     },
     {
       "id": "bad-yaml-and-unparsed",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui", "JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:ui:check"],
       "steps": [
         "Open Journal Stream.",
         "Inspect bad-yaml-260813.md and unparsed-fixture.md cards."
@@ -118,19 +122,19 @@
     },
     {
       "id": "real-ui-performance",
-      "setup": ["pnpm run fixture:ui", "pnpm run fixture:ui:check"],
+      "setup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:performance"],
       "steps": [
-        "Measure warm open time for default recent-30 Journal Stream.",
-        "Modify one visible fixture source file externally.",
-        "Measure modify-to-UI update latency."
+        "Warm and reopen the matching Journal workspace leaf for the 100-file / 1k-entry fixture.",
+        "Warm and reopen the matching Journal workspace leaf for the 2k-file / 20k-entry fixture.",
+        "Modify one mounted Medium fixture source 20 times through Vault.modify and observe the embedded editor."
       ],
       "evidence": [
-        "Small warm open <= 200ms where applicable.",
-        "Medium warm open <= 500ms where applicable.",
+        "Small warm open <= 200ms and the first persistent editor is ready.",
+        "Medium warm open <= 500ms and progressive DOM remains bounded.",
         "Single-file modify-to-UI p95 <= 300ms.",
-        "Measurement method and viewport are recorded."
+        "Measurement method, Obsidian version, viewport, all 20 samples, and source restoration are recorded."
       ],
-      "cleanup": ["pnpm run fixture:ui:clean"]
+      "cleanup": ["JOURNAL_STREAM_VAULT_ROOT='/Users/feng/Documents/OBSIDIAN/TEST' pnpm run fixture:performance:clean"]
     }
   ]
 }

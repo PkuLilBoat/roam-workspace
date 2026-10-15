@@ -1,4 +1,5 @@
 import { DailyNoteSettings } from "../types/settings";
+import { DEFAULT_NAVIGATION_SECTION_COLLAPSED } from "../navigation/sectionState";
 
 export const DEFAULT_SETTINGS: DailyNoteSettings = {
     hideFrontmatter: false,
@@ -11,6 +12,15 @@ export const DEFAULT_SETTINGS: DailyNoteSettings = {
     showSourcePath: true,
     enableExportMarkdown: true,
     navigationViews: ["journal-stream"],
+    navigationSectionCollapsed: { ...DEFAULT_NAVIGATION_SECTION_COLLAPSED },
+    recentFileClassFilter: [],
+    recentFileTagsFilter: [],
+    recentFilePropertyFilters: {},
     recentFiles: [],
+    showRecentTasks: false,
+    recentTaskBlocks: [],
+    recentTaskTagsFilter: [],
+    recentTaskPagesFilter: [],
+    outlinerScope: "stream-only",
     preset: [],
 };

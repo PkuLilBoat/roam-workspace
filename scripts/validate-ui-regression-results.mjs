@@ -1,8 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { resolveTestVaultRoot } from "./test-vault-root.mjs";
 
 const checklistPath = new URL("./ui-regression-checklist.json", import.meta.url);
 const checklist = JSON.parse(await readFile(checklistPath, "utf8"));
+const expectedVaultRoot = resolveTestVaultRoot();
 const resultsPath = process.argv.slice(2).find((arg) => arg !== "--");
 
 if (!resultsPath) {
@@ -123,9 +125,9 @@ function validateRunMetadata(results) {
         return;
     }
 
-    if (environment.vaultRoot !== checklist.vaultRoot) {
+    if (environment.vaultRoot !== expectedVaultRoot) {
         failures.push(
-            `environment.vaultRoot must be ${JSON.stringify(checklist.vaultRoot)}`
+            `environment.vaultRoot must be ${JSON.stringify(expectedVaultRoot)}`
         );
     }
 

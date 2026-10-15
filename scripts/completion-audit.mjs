@@ -1,12 +1,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { resolveTestVaultRoot } from "./test-vault-root.mjs";
 
 const root = process.cwd();
-const vaultRoot = process.env.ROAM_IN_OB_VAULT_ROOT;
-if (!vaultRoot) {
-    throw new Error("Set ROAM_IN_OB_VAULT_ROOT to the test vault path.");
-}
-const pluginDir = `${vaultRoot}/.obsidian/plugins/roam-in-ob`;
+const vaultRoot = resolveTestVaultRoot();
+const pluginDir = `${vaultRoot}/.obsidian/plugins/roam-workspace`;
 const checklist = JSON.parse(
     readFileSync(path.join(root, "scripts/ui-regression-checklist.json"), "utf8")
 );
@@ -34,7 +32,8 @@ check(
 check("ui-regression-checklist-8-cases", checklist.cases?.length === 8);
 check(
     "fixture-clean",
-    !existsSync(`${vaultRoot}/Journal/_journal_stream_regression_fixture`)
+    !existsSync(path.join(vaultRoot, "Journal", "_journal_stream_regression_fixture")) &&
+        !existsSync(path.join(vaultRoot, "Journal", "_journal_stream_performance"))
 );
 
 if (resultsPath) {

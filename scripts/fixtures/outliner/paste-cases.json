@@ -1,0 +1,44 @@
+[
+  {
+    "name": "mixed tabs and spaces",
+    "input": "- root\n - root drift\n   - child\n\t   - grandchild",
+    "expected": "- root\n- root drift\n\t- child\n\t\t- grandchild",
+    "reason": "list"
+  },
+  {
+    "name": "ordered list markers",
+    "input": "1. first\n   2. second\n      3. third",
+    "expected": "- first\n\t- second\n\t\t- third",
+    "reason": "list"
+  },
+  {
+    "name": "checkboxes",
+    "input": "- [X] done\n  - [ ] child",
+    "expected": "- [x] done\n\t- [ ] child",
+    "reason": "list"
+  },
+  {
+    "name": "frontmatter",
+    "input": "---\ntags:\n  - journal\n---",
+    "expected": "---\ntags:\n  - journal\n---",
+    "reason": "protected"
+  },
+  {
+    "name": "fenced code",
+    "input": "```md\n- literal\n```",
+    "expected": "```md\n- literal\n```",
+    "reason": "protected"
+  },
+  {
+    "name": "math block",
+    "input": "$$\na-b\n$$",
+    "expected": "$$\na-b\n$$",
+    "reason": "protected"
+  },
+  {
+    "name": "html block",
+    "input": "<div>\n- literal\n</div>",
+    "expected": "<div>\n- literal\n</div>",
+    "reason": "protected"
+  }
+]

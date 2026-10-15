@@ -1,0 +1,424 @@
+# Journal Stream DNE Spike
+- 最终状态（2026-08-13）
+	- 用户反馈后的修正（2026-08-13）
+		- 修复直接点击 `Open Journal Stream` 后显示 `No files found`。
+			- 原因：首批加载依赖 `leaf.height !== 0`，真实 Obsidian tab 里该值可能为 0。
+			- 处理：`loadNextBatch()` 不再用 `leaf.height` 阻断首批加载。
+		- 修复默认入口复用旧 Journal Stream tab。
+			- 原因：测试 fixture view / 旧 folder view 可能被当成当前 view 审计或继续复用。
+			- 处理：默认 Journal 入口会清理不匹配的 Journal Stream leaves，并强制打开 `Journal` / `journalDate` / `recent-30`。
+		- 简化日常 UI。
+			- 默认卡片直接挂载 Markdown editor。
+			- 移除标题栏 preview/edit 切换按钮。
+			- 移除主界面 copy button；导出保留 command palette 命令。
+		- 改同步策略。
+			- 外部 Markdown 是真源。
+			- 普通外部修改不再进入 `Changed outside` + `Reload editor` 冲突流程。
+			- vault modify 事件触发编辑器重挂载或预览刷新，状态显示 `Synced`。
+		- 增加当天 Journal 自动创建。
+			- 默认入口打开前检查 `Journal/YYMMDD.md`。
+			- 今天 2026-08-13 自动创建 `Journal/260813.md`。
+			- 后台验证中打开前该文件不存在，打开后创建为空 Markdown，并进入 recent-30 第一位。
+		- 增加日期标题视觉层级。
+			- Journal 卡片标题显示解析后的标准日期 label。
+			- 日期字体加大加粗，并在前面显示 journal SVG 图标。
+		- 验证结果
+			- `pnpm run build` 通过，0 errors / 0 warnings。
+			- `pnpm run test:journal` 通过。
+			- `pnpm run install:check` 通过。
+			- 直接 `Open Journal Stream` manual audit：
+				- rendered：`Journal/260813.md`、`Journal/260810.md`、`Journal/260808.md`、`Journal/260805.md`。
+				- `editingCount: 4`。
+				- `conflictCount: 0`。
+				- `exportButtonCount: 0`。
+				- titles：`2026-08-13`、`2026-08-10`、`2026-08-08`、`2026-08-05`。
+			- 外部修改 autosync audit：
+				- `saveStatus` 以 `Synced` 开头。
+				- `conflictVisible: false`。
+				- source Markdown 仍包含外部 marker。
+	- 结论
+		- `Daily Notes Editor` fork 作为 Journal Stream 二开底座可行。
+		- 当前 spike 已安装到 TASK vault，插件 id 为 `journal-stream-dne-spike`。
+		- 完成度审计已通过。
+			- `pnpm run completion:audit -- artifacts/ui-regression-results.partial.json`
+			- 输出 `complete: true`、`uiCasesPassed: 8`、`uiCasesTotal: 8`。
+	- 已修复的关键问题
+		- 默认 Journal 入口不全量渲染历史，默认 recent-30 且 5 篇批次按视口推进。
+		- Folder Journal 数据源从目标目录递归收集 Markdown，不为默认入口扫描全 vault Markdown。
+		- 卡片默认直接挂载真实 Markdown editor，减少 preview / edit 概念负担。
+		- 普通外部修改自动从 Markdown 真源同步回 Journal Stream，不再要求用户手动 reload。
+		- `.md -> 非 Markdown` rename 会从渲染窗口移除；非 Markdown rename 回 Markdown 会重新进入窗口。
+		- 复制导出保留在 command palette，主界面不显示 copy button。
+	- 验收证据
+		- UI regression results
+			- `/Users/feng/Documents/OBSIDIAN/TASK/PROJECTFILE/效率工具探究/ob插件开发/spikes/journal-stream-dne-spike/artifacts/ui-regression-results.partial.json`
+		- 8/8 passed cases
+			- `open-default-view`
+			- `settings-ui`
+			- `preview-to-edit-save`
+			- `copy-visible-markdown`
+			- `external-change-reload`
+			- `rename-refresh`
+			- `bad-yaml-and-unparsed`
+			- `real-ui-performance`
+		- 性能 artifact
+			- `/Users/feng/Documents/OBSIDIAN/TASK/PROJECTFILE/效率工具探究/ob插件开发/spikes/journal-stream-dne-spike/artifacts/journal-performance-latest.json`
+			- Small 100 files：0.57ms。
+			- Medium 2,000 files：1.99ms。
+			- Large 10,000 files：8.42ms。
+			- Incremental 10,000 files / 1,000 updates：p95 6.72ms。
+	- 最终验证命令
+		- `pnpm run build`
+			- 通过，`svelte-check found 0 errors and 0 warnings`。
+		- `pnpm run test:journal`
+			- 通过。
+		- `pnpm run ui:results:validate -- artifacts/ui-regression-results.partial.json`
+			- 通过，`UI regression results passed: 8 cases`。
+		- `pnpm run install:check`
+			- 通过，安装产物 hash 与当前构建一致。
+		- `python3 /Users/feng/.agents/skill-library/xiaobao/scripts/validate_task_frontmatter.py --root /Users/feng/Documents/OBSIDIAN/TASK`
+			- 通过。
+	- 测试清理
+		- 已执行 `pnpm run fixture:ui:clean`。
+		- fixture 目录 `/Users/feng/Documents/OBSIDIAN/TASK/Journal/_journal_stream_regression_fixture` 已清理。
+- 目的
+	- 这是 `[[功能2 jounal视图PRD]]` 的第一阶段 spike。
+	- 基线来自 `Daily Notes Editor`，用于验证它是否适合作为 Roam-like Journal 流水视图的二开基础。
+- 当前改动
+	- 插件 id 改为 `journal-stream-dne-spike`，避免和原 `daily-notes-editor` 插件冲突。
+	- ribbon / command 默认打开 `Open Journal Stream`。
+	- 默认打开模式改为 `journal-folder`。
+	- 默认 Journal 目录为 `Journal`。
+	- 默认时间范围改为 `recent-30`。
+		- ribbon / command 打开时只进入最近 30 天有界窗口。
+		- 右键文件夹 `Open Journal Stream for this folder` 也使用 `initialRange`，避免继承旧 view 的 `all` / `custom` 范围。
+		- `All Notes` 保留为菜单中的显式展开选项。
+	- 补充快捷时间范围。
+		- `today`。
+		- `recent-7`。
+		- `recent-30`。
+		- week / month / year / quarter / last-* / custom / all。
+		- 日期范围菜单和初始范围设置页共用同一组 range option。
+		- 初始范围设置页暴露全部非 custom 范围；custom 仍通过菜单 modal 设置，避免没有持久 custom bounds 的默认入口。
+		- view 内切换 mode / range / timeField 后会显式 `requestSaveLayout()`；命令入口批量设置仍由外层只保存一次布局。
+		- custom range 的日期输入使用本地日期解析。
+			- modal 默认 start / end 是今天整天，而不是打开 modal 的当前瞬间。
+			- start date 归一到当天 00:00:00.000。
+			- end date 归一到当天 23:59:59.999，避免结束日当天日志被排除。
+			- workspace state 恢复后如果 customRange 变成序列化字符串，会先标准化回 `Date` 再参与过滤和导出。
+			- 切换到非 custom 范围时会清空旧 customRange，避免陈旧范围残留在 view state 或导出上下文里。
+			- 切换 view mode 时会清空旧 customRange；切到 Daily mode 时会强制清空旧 folder/tag target。
+			- 如果从 custom range 切换 view mode，会把 `selectedRange` 回退到 `initialRange`，避免 customRange 被清空后留下无效 custom 空视图。
+			- workspace state 恢复出 `selectedRange: custom` 但 customRange 缺失或非法时，会回退到 `initialRange`。
+			- workspace state 恢复时会白名单校验 `selectionMode`、`timeField` 和 `selectedRange`，未知值回退到稳定默认值。
+			- Daily mode 恢复时会清空旧 target，避免继承 folder/tag 目标。
+			- `setState()` 即使收到空 / null workspace state，也会创建默认 Svelte view，避免空白自定义 tab。
+		- Daily mode 使用 Daily Notes format 严格解析文件名。
+		- Daily mode 的 recent / last-* 范围边界统一基于同一个 `now`，避免跨午夜重复取当前时间导致范围不一致。
+	- 补充低风险设置项。
+		- `journalFolder` 控制默认 Journal 目录。
+		- `initialRange` 控制默认打开范围，已同时作用于 Journal folder 默认入口和 Daily Notes 默认入口。
+		- `showSourcePath` 控制卡片源路径 / 解析日期显示，不隐藏保存 / 同步状态。
+		- `enableExportMarkdown` 控制当前窗口 Markdown 导出按钮显示和命令启用状态。
+		- `loadSettings()` 已改为白名单恢复，非法 `defaultOpenMode` / `initialRange` / 空 `journalFolder` / 坏 `preset` 会回退或清洗。
+		- 设置修改会通过 `settingsRevision` 广播到已打开的 Journal view，使 `showSourcePath` 和 `enableExportMarkdown` 的 UI 状态即时重新计算。
+		- 默认设置、settings restore、settings revision、默认 Journal folder state、Daily state、tag state 和导出命令 gating 已抽到纯函数并纳入 `pnpm run test:journal`。
+		- `autosaveDelayMs` 未接入，因为 spike 写回依赖 Obsidian 原生 MarkdownView 保存链路。
+		- `conflictPolicy` 当前固定为 `block-and-reload`，不暴露策略切换。
+	- 增加 `journalDate` / `journalDateReverse` 排序字段。
+	- folder 模式下可按 Journal 日期排序和过滤。
+	- folder / tag 数据源归属规则已抽到纯函数。
+		- Journal folder 直属文件会被纳入。
+		- Journal 子目录文件会被纳入。
+		- `Journalism` 这类相邻路径前缀不会被误纳入。
+		- tag target 自动补 `#`，并按 Obsidian metadata cache 中的 tag 字符串精确匹配。
+	- Journal folder 的 tab / title 显示为 `Journal: Journal`。
+	- 重复触发打开命令时复用匹配的既有 view leaf，不再持续创建重复 tab。
+	- 默认入口打开前会创建当天 Journal Markdown。
+		- 命名使用 `YYMMDD.md`，与当前 TASK Journal 目录习惯一致。
+		- 如果 `Journal/260813.md` 已存在则直接复用。
+		- 如果 `Journal/` 目录不存在或创建失败，会弹 Notice 并继续打开现有 Journal Stream。
+	- tag 入口也会写入显式 workspace state。
+		- `selectionMode: tag`。
+		- `target: <tag>`。
+		- `timeField`。
+		- `selectedRange`。
+		- `customRange: null`。
+	- 每篇 Journal 标题下显示源文件追溯状态。
+		- 格式为 `source path | parsed date`。
+		- 日期解析失败时显示 `date not parsed; sorted by modified time`。
+	- Journal 卡片默认直接进入编辑态。
+		- 使用 Obsidian 原生 Markdown editor 挂载源文件。
+		- 预览渲染能力仍保留为非默认状态和回归能力，不作为日常主交互。
+		- 使用 Obsidian `MarkdownRenderer.render()` 渲染源 Markdown preview。
+		- 渲染窗口从 1ms interval 单篇追加改为 5 篇批次、视口触底推进。
+		- 每篇卡片的 Markdown preview 只在接近视口时渲染；离开视口后会卸载 preview。
+		- 编辑中的 Markdown editor 不因卡片离开视口自动卸载，避免滚动时丢编辑上下文。
+		- preview 异步渲染已加 token 取消保护；切换编辑、卸载或重新渲染后，旧 `cachedRead` / `MarkdownRenderer.render` 结果不会回写当前 DOM。
+		- editor post-mount 400ms 回调已改为可清理状态；卸载 / 销毁会清理 pending timeout，回调执行前也校验 leaf 身份。
+		- editor 卸载时会移除保存状态用的 `input` / `keydown` 监听，并清理 DOM 注册标记，避免重复挂载后残留监听。
+		- 预览 / 编辑模式切换的 0ms timeout 已改为可清理状态，组件销毁后不会继续触发迟到的 `showEditor()` / `renderPreview()`。
+	- 嵌入 editor 点击时会设置 active leaf 并 focus editor。
+	- 监听 vault `modify` 事件，对已渲染 Journal 做源文件同步。
+		- 外部 Markdown 是真源，普通外部修改会自动重新挂载 editor 或刷新 preview。
+		- 同步完成后状态显示 `Synced HH:MM:SS`。
+		- 保存确认只接受本卡片最近 5 秒内真实输入后产生的 `modify` 事件。
+		- 单纯点击 / focus editor 不再把 `modify` 事件识别成本地保存，降低外部修改被误判为保存成功的风险。
+		- 非文本变更 keydown（方向键、Esc、Meta/Ctrl 快捷键、Alt 字符组合）不再触发 `Saving...` 或本地保存确认窗口。
+		- 如果外部修改发生时当前卡片处于编辑态，会卸载并重挂载 editor，把源文件内容拉回视图。
+		- 如果外部修改发生在离屏预览态卡片，只记录同步状态，不主动读取或渲染 Markdown preview，避免后台 modify 打破视口懒加载。
+	- 每篇 Journal 的源路径状态条显示保存 / 同步状态。
+		- `Loaded HH:MM:SS`
+		- `Saving...`
+		- `Saved HH:MM:SS`
+		- `Save not confirmed`
+		- `Synced HH:MM:SS`
+		- `Reloaded HH:MM:SS`
+	- 增加当前窗口 AI-readable Markdown 导出。
+		- 主界面默认不显示复制按钮，避免干扰日常编辑。
+		- 命令面板提供 `Copy Journal Stream as Markdown`，复用导出链路。
+		- 导出时优先使用当前可见 Journal；可见性事件未初始化时回退到已加载窗口。
+		- 导出内容包含 filter、source files、entries、source_path 和 date_source。
+		- custom range 导出使用本地年月日格式，避免 `toISOString()` 在非 UTC 时区把日期显示成前一天。
+		- 代码块围栏会根据内容中的反引号长度动态加长，避免原文代码块破坏导出 Markdown。
+		- 源文件读取失败、Clipboard API 不可用或写入失败时显示 `Copy failed` 状态和失败 Notice，并把错误输出到 console 便于回归诊断。
+		- 导出流程在组件销毁后不会继续写入 export status 或弹 Notice。
+	- 补充文件事件刷新。
+		- `DailyNoteView` 注册 vault `create` / `modify` / `delete` / `rename`。
+		- vault 事件入口只处理 Markdown 文件，非 Markdown 附件变化不会触发 Journal 列表刷新。
+		- `rename` 对新路径或旧路径任一为 Markdown 的事件都会触发刷新，避免 `.md -> .png` 时旧卡片残留，也支持 `.png -> .md` 后纳入新文件。
+		- `DailyNoteEditorView` 将事件同步到当前 FileManager 过滤列表和已渲染列表。
+		- vault 事件、layout ready 回调和 hourly check 都已在 Svelte view 未就绪时安全跳过，避免初始化 / 销毁边界空引用。
+		- `modify` 对已渲染 Journal 立即发出卡片级变更 token，用于保存 / 外部修改状态刷新。
+		- `modify` 的列表刷新使用 200ms debounce，批量变化进入 pending queue，200ms debounce 后按 path 去重并逐个走单文件增量索引更新，用于覆盖 frontmatter date、mtime、tag 或路径变化导致的进出窗口。
+		- Refresh action 会清理待执行的 modify debounce，强制 `FileManager.refreshFiles()`，并按当前范围重建已渲染窗口。
+		- 跨天刷新也复用同一显式 refresh 路径，避免只触发 `check/tick/$set` 而不重扫 folder/tag 数据源。
+		- `create` / `delete` / `rename` 仍立即同步当前过滤列表和已渲染列表；其中 create / modify / rename 只更新事件涉及的单文件索引，不再默认重扫全库。
+		- `create` 按文件 `path` 做 upsert，避免重复 create 事件产生重复卡片。
+		- 手动创建当天 Daily Note 的路径也按 `path` upsert，避免 create 事件随后重复追加。
+		- 手动创建当天 Daily Note 后从 FileManager 当前过滤结果重建已渲染窗口，不再硬插到顶部破坏反向排序或 name 排序。
+		- `delete` 按文件 `path` 删除，避免不同目录同名 Markdown 被误删出当前列表。
+		- `getAllFiles()` / `getFilteredFiles()` 返回数组副本，避免组件分页 `splice` 意外修改 FileManager 内部缓存。
+		- `rename` 清理旧路径的可见状态和保存 / 外部修改状态；只有新路径仍在当前渲染窗口时才迁移可见状态，避免 `.md -> .png` 或改名后离开当前区间时残留可见路径。
+		- 填充视口递归 timeout、导出状态清空 timeout、modify debounce 都已纳入销毁清理，避免 view 卸载后迟到改状态。
+		- spike 阶段已从重建式事件刷新推进到单文件索引更新；显式 Refresh、切换 mode / target / timeField 仍会重扫当前数据源。
+	- 补充基础 UI 质量修复。
+		- 创建当天 Daily Note 的入口从可点击 `div` 改为真实 `button`，支持键盘聚焦和触发。
+		- Journal 卡片折叠入口和源文件跳转标题从伪交互 `span` 改为真实 `button`，删除对应 a11y ignore。
+		- 文件夹右键 `Open Journal Stream for this folder` 的 `file-menu` 事件已改为通过 `registerEvent` 注册，避免插件重载 / 禁用后残留重复菜单项。
+		- 删除运行期普通调试 `console.log`，只保留错误日志。
+		- 空态和尾部文案改成稳定 ASCII 文本，减少 UI / AX 回归中的符号干扰。
+	- 抽出 `src/utils/journalCore.ts`，承载可测试的日期解析、排序和范围过滤逻辑。
+	- 抽出 `src/utils/journalExport.ts`，承载可测试的导出 Markdown 组装逻辑。
+	- Journal 日期解析优先级
+		- frontmatter `date`。
+		- frontmatter `created`。
+		- 文件名 `YYMMDD`。
+		- 文件名 `YYYY-MM-DD`。
+		- 解析失败时按文件 mtime 排序和过滤兜底。
+- 构建验证
+	- 已运行 `pnpm install`。
+	- 已运行 `pnpm run build`。
+	- 结果
+		- `svelte-check found 0 errors and 0 warnings`。
+		- Vite 产出 `main.js` 和 `styles.css`。
+- 自动测试
+	- 已新增 `pnpm run test:journal`。
+	- 当前结果
+		- `journalCore tests passed`。
+	- 覆盖范围
+		- `YYMMDD` 文件名日期解析。
+		- `YYYY-MM-DD` 文件名日期解析。
+		- 非法日期文件名不会滚动成合法日期，会降级为未解析日期。
+		- frontmatter `date` 优先级。
+		- frontmatter `created` 优先级。
+		- 日期解析失败降级提示。
+		- `journalDate` 倒序排序。
+		- `journalDateReverse` 正序排序。
+		- 范围过滤会保留传入文件列表的既有排序方向，避免 `journalDateReverse` / `mtimeReverse` 被二次反转。
+		- `today` / `recent-7` / `recent-30` / month / custom range 过滤。
+		- `recent-30` inclusive 边界。
+		- AI-readable Markdown 导出格式。
+		- custom range 导出日期使用本地日期。
+		- 嵌套代码围栏导出。
+		- 当前可见优先导出选择。
+		- 可见性事件未初始化时回退到已加载窗口。
+		- 导出读取顺序。
+		- 导出源文件读取失败路径。
+		- Clipboard 写入成功、Clipboard API 不可用和写入失败路径。
+		- 保存状态判定。
+			- 本地输入后 5 秒内的 `modify` 事件识别为保存确认。
+			- 未发生本地输入时的 `modify` 事件不识别为保存确认。
+			- 保存确认超时边界会进入 `Save not confirmed`。
+			- 只有 input 或文本变更 keydown 会打开本地保存确认窗口。
+		- custom range 日期输入。
+			- modal 默认范围覆盖今天整天。
+			- start date 使用当天零点。
+			- end date 覆盖当天末尾。
+			- 非法日期会被拒绝。
+			- modal 中非法或空日期不会抛错中断 UI，会显示错误并禁用 Confirm。
+			- modal 中 start 晚于 end 时会显示错误并禁用 Confirm。
+			- workspace state 序列化后的字符串日期会标准化回 `Date`。
+			- 非 custom 范围不会导出陈旧 customRange。
+			- custom range 标题显示也走标准化日期，兼容 workspace state 里的字符串日期。
+			- workspace state 恢复白名单。
+			- 空 / null workspace state 默认恢复。
+			- 非法 workspace state 回退。
+			- custom workspace state 日期恢复。
+			- range option 覆盖全部 `TimeRange`。
+			- 初始范围设置覆盖全部非 custom range。
+		- 文件列表身份。
+			- delete 按 `path` 删除，不按 `basename` 删除。
+			- create 按 `path` upsert，不重复追加已存在源文件。
+			- upsert 替换已存在源文件时保留其列表位置。
+			- 创建 Daily Note 后仍从排序后的过滤窗口显示，避免反向排序或 name 排序被硬插顶部打乱。
+		- 默认设置和 view state。
+			- 默认设置为 `journalFolder: Journal`、`defaultOpenMode: journal-folder`、`initialRange: recent-30`、`showSourcePath: true`、`enableExportMarkdown: true`。
+			- settings restore 会清洗坏布尔值、非法 `defaultOpenMode`、非法或 custom `initialRange`、空 `journalFolder` 和坏 `preset`。
+			- settings revision 单调递增，用于把设置改动广播给已打开 view。
+			- 默认 Journal folder command 会持久化 `folder / Journal / journalDate / recent-30`。
+			- Daily mode 会持久化 `daily / journalDate / configured initialRange`。
+			- tag 入口会持久化 tag target、time field 和 selected range。
+			- 导出命令只在导出设置开启且存在 Journal view 时启用。
+		- render window。
+			- 初始渲染只追加一个 5 篇批次。
+			- 滚动触底才继续追加后续批次。
+			- 文件事件刷新会保持当前已渲染窗口大小，不因为后台 modify 额外追加一批。
+		- render policy。
+			- 预览态卡片离屏会卸载 Markdown preview。
+			- 编辑态卡片离屏不会卸载 Markdown editor。
+			- 用户退出编辑态后才卸载 Markdown editor。
+			- 离屏卡片收到外部修改不会主动刷新 Markdown preview，避免后台 modify 打破视口懒加载。
+	- folder / tag 数据源。
+		- Journal folder 直属和子目录文件会被纳入。
+		- 相邻路径前缀不会误匹配。
+		- tag 名会标准化为 `#tag`。
+		- tag cache 使用精确 tag 匹配。
+		- folder/tag source pipeline 会先按 Journal date 排序再应用有界 range。
+		- folder mode 初始化已改为从目标 `TFolder.children` 递归收集 Markdown，避免默认 Journal folder 入口调用 `vault.getMarkdownFiles()` 扫全库；测试覆盖嵌套目录和非 Markdown 子文件过滤。
+		- tag mode 仍需要扫描全库 Markdown 并读取 metadata cache；它不是第一版默认入口。
+- 核心性能基准
+	- 已新增 `pnpm run bench:journal`。
+	- 当前结果
+		- Small：100 files 排序加过滤 0.54ms，visible=31。
+		- Medium：2,000 files 排序加过滤 1.98ms，visible=31。
+		- Large：10,000 files 排序加过滤 8.39ms，visible=31。
+		- Incremental：1,000 次单文件更新 / 10,000 files，数据层 p95 6.81ms，visible=34。
+	- 边界
+		- 该基准覆盖 `journalCore` 排序过滤和 `incrementalFileSet` 单文件更新的纯数据路径。
+		- Obsidian 真实 UI warm open、editor 挂载成本和 modify-to-UI p95 仍需可观测后台 UI 通道验证。
+- UI audit reporter
+	- 已新增插件命令 `Write Journal Stream UI Audit`。
+	- 输出路径
+		- `/Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/ui-audit-latest.json`
+	- 输出内容
+		- `runAt`、`status`、plugin id/version、Obsidian 版本兜底、TASK vaultRoot、viewport、核心 settings。
+		- 成功时包含 view state、当前 Journal view 的 rendered / pending / visible 数量、DOM note / preview / editor / conflict / source meta / export button 计数、标题和路径列表。
+		- 失败时也会写出 `status: failed` 和 `reason`，用于区分“插件处理了 request 但没有可审计 view”和“插件进程没有响应 request”。
+	- 校验命令
+		- `pnpm run ui:audit:validate -- /Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/ui-audit-latest.json`
+		- 失败结构校验：`pnpm run ui:audit:validate -- --allow-failed /Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/ui-audit-latest.json`
+	- 后台触发脚本
+		- `pnpm run ui:audit:request -- <runId> --open-default-view`
+		- 该脚本写入 `/Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/ui-audit-request.json`；插件加载新代码后每 2 秒轮询 request，必要时先打开默认 Journal Stream，再生成 latest audit。
+	- 等待脚本
+		- `pnpm run ui:audit:wait -- <runId> --timeout-ms=15000`
+		- 只接受 matching `runId` 的 latest audit；`status: failed` 会返回非 0，避免误判通过。
+	- 边界
+		- audit JSON 是后续真实 UI results 的 artifact，不替代点击、编辑、剪贴板和真实性能验收。
+		- 2026-08-13 已通过 Advanced URI 后台 disable/enable 目标插件完成重载，`ui:audit:wait` 取得 matching `runId` 的 `status: passed` audit。
+		- 当前 audit artifact：`/Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/ui-audit-latest.json`。
+		- audit 已证明默认 Journal folder / recent-30 / journalDate view state，并渲染 3 个 Journal card DOM container、3 个 preview、3 个 editor 容器、3 个 source meta 和 1 个 export button。
+- Partial UI results
+	- 已新增 `pnpm run ui:results:partial-from-audit`。
+	- 输出路径
+		- `/Users/feng/Documents/OBSIDIAN/TASK/PROJECTFILE/效率工具探究/ob插件开发/spikes/journal-stream-dne-spike/artifacts/ui-regression-results.partial.json`
+	- artifact 策略
+		- audit artifact 会按 runId 固化到 `artifacts/ui-audit-<runId>.json`，避免 `ui-audit-latest.json` 被后续 audit 覆盖后证据失效。
+	- 当前状态
+		- 已把 `open-default-view` 和 `bad-yaml-and-unparsed` 标为 `passed`。
+		- 稳定 artifact：
+			- `/Users/feng/Documents/OBSIDIAN/TASK/PROJECTFILE/效率工具探究/ob插件开发/spikes/journal-stream-dne-spike/artifacts/ui-audit-default2-1786568388.json`
+			- `/Users/feng/Documents/OBSIDIAN/TASK/PROJECTFILE/效率工具探究/ob插件开发/spikes/journal-stream-dne-spike/artifacts/ui-audit-fixture2-1786568404.json`
+		- 完整 `pnpm run ui:results:validate -- artifacts/ui-regression-results.partial.json` 仍会失败，防止误判最终通过。
+- 完成度审计
+	- 已新增 `pnpm run completion:audit`。
+	- 当前结果
+		- 自动证据、安装状态、audit tooling、回归 tooling、8 case checklist、fixture clean 均通过。
+		- 读取 partial results 时显示 UI case 2/8 passed、6/8 pending。
+	- 边界
+		- 没有真实 `ui-regression-results.json` 时该命令必须失败，避免把脚本、安装或 workspace state 误当成最终 UI 验收。
+- 安装状态
+	- 已复制到 TASK vault。
+		- `/Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/manifest.json`
+		- `/Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/main.js`
+		- `/Users/feng/Documents/OBSIDIAN/TASK/.obsidian/plugins/journal-stream-dne-spike/styles.css`
+	- 已加入 `/Users/feng/Documents/OBSIDIAN/TASK/.obsidian/community-plugins.json`。
+	- 已备份原 community plugins 配置。
+	- 已重启 Obsidian 让启用列表生效。
+	- 已新增并通过可复现安装校验。
+		- 命令：`pnpm run install:check`。
+		- 校验内容：community plugin 启用列表、安装目录 `manifest.json` / `main.js` / `styles.css` 与当前构建产物 SHA256 一致、manifest id 匹配、workspace 中存在 1 个 `daily-note-editor-view` state。
+- 入口验证
+	- 已通过 Advanced URI 触发命令。
+		- `journal-stream-dne-spike:open-journal-stream`
+	- 已在 workspace 状态中确认主编辑区打开。
+		- `type: daily-note-editor-view`
+		- `selectionMode: folder`
+		- `target: Journal`
+		- `timeField: journalDate`
+		- `selectedRange: recent-30`
+		- `title: Journal: Journal`
+	- 已验证重复触发命令后 workspace 中 `daily-note-editor-view` 数量保持为 1。
+	- 已通过截图观察到源路径和日期状态条。
+		- `/tmp/obsidian-journal-source-meta.png`
+		- 示例：`Journal/260808.md | 2026-08-08`。
+	- 已通过截图观察到真实 Markdown editor 内容挂载。
+		- `/tmp/obsidian-journal-editor-mounted.png`
+	- 已完成真实写回验证。
+		- 通过聚合视图输入唯一测试标记后，源文件 `/Users/feng/Documents/OBSIDIAN/TASK/Journal/260810.md` 发生变化并包含标记。
+		- 测试后已删除临时标记。
+	- 已完成关闭重开恢复验证。
+		- 重启 Obsidian 后 workspace 仍恢复 `daily-note-editor-view`。
+		- 状态保持 `selectionMode: folder`、`target: Journal`、`timeField: journalDate`、`title: Journal: Journal`。
+	- 已完成外部修改自动同步验证。
+		- 临时追加 `/Users/feng/Documents/OBSIDIAN/TASK/Journal/260810.md` 后，视图自动从 Markdown 真源同步。
+		- 旧版 `Changed outside` / `Reload editor` 提示策略已替换为自动同步策略。
+		- 测试追加内容已清理。
+	- 已完成保存 / 同步状态验证。
+		- 外部修改 audit 观察到 `Synced` 状态。
+		- 通过聚合编辑器输入唯一测试标记后，`/Users/feng/Documents/OBSIDIAN/TASK/Journal/260622.md` hash 变化并包含标记。
+		- 测试标记已清理，并修复测试插入导致的一行拆分。
+		- 已实现输入后的 `Saving...` 和 5 秒未确认后的 `Save not confirmed` 兜底。
+	- 已完成当天 Journal 自动创建和日期标题验证。
+		- 后台打开默认 Journal Stream 前 `/Users/feng/Documents/OBSIDIAN/TASK/Journal/260813.md` 不存在。
+		- 打开后自动创建该空 Markdown，且 audit 显示它位于 recent-30 第一位。
+		- audit 标题为 `2026-08-13`、`2026-08-10`、`2026-08-08`、`2026-08-05`，对应加大日期标题和 journal SVG 图标。
+- UI 回归准备
+	- 已新增 UI 回归 fixture 准备 / 校验脚本。
+	- 已新增机器可读 UI 回归 checklist。
+	- 已新增 UI 回归结果 validator。
+		- `pnpm run ui:results:validate -- <results.json>` 要求所有 case 为 `passed`，environment 匹配 TASK vault 和插件 id，runAt / operator / obsidianVersion / viewport 是实际记录值，每项都有非空 evidence 和真实存在的 artifact 文件；`real-ui-performance` 还必须满足 smallWarmOpenMs <= 200、mediumWarmOpenMs <= 500、modifyToUiP95Ms <= 300。
+		- `scripts/ui-regression-results.example.json` 只是 pending 模板，不能作为完成证据。
+		- `pnpm run ui:checklist` 输出人类可读步骤。
+		- `pnpm run ui:checklist:json` 输出 JSON。
+		- 覆盖 open-default-view、settings-ui、preview-to-edit-save、copy-visible-markdown、external-change-reload、rename-refresh、bad-yaml-and-unparsed、real-ui-performance。
+		- `pnpm run fixture:ui` 创建 `/Users/feng/Documents/OBSIDIAN/TASK/Journal/_journal_stream_regression_fixture`。
+		- `pnpm run fixture:ui:check` 校验该目录内 4 个 fixture 文件名和内容完全匹配。
+		- `pnpm run fixture:ui:clean` 清理该目录。
+		- fixture 覆盖 YYMMDD、ISO 日期、坏 YAML、unparsed filename、checkbox、嵌套列表、wikilink、callout 和代码块。
+- 尚未验证
+	- 尚未完成基于 `node_repl` / `@oai/sky` 的可操作 Computer Use UI 回归。
+		- 2026-08-13 只读 `get_app_state` 可通过文件取得 Obsidian 截图路径和浅层窗口 / 菜单 AX 文本。
+		- 2026-08-13 04:15 只读 Computer Use 状态更新：可取得截图和 284 字符 AX 文本，但 AX 仍只有窗口 / 菜单层；截图显示当前 Obsidian 停在普通 `260812` 笔记，不是 Journal Stream view，因此不能生成 passed UI results。
+		- 只读截图路径：`/var/folders/mc/yb1s87vx4jzgclgflytm0l7c0000gn/T/com.openai.sky.CUAService/Obsidian Screenshot 2026-08-13 at 4.15.41 AM.jpeg`。
+		- 当前未取得可可靠操作的 Journal Stream 控件树；用户已要求不能抢占前台，因此 reload 后同步刷新不能用前台截图替代。
+		- 本轮没有执行点击 / 输入式 UI 回归。
+	- 尚未验证大量 Journal 文件下的真实 Obsidian UI 性能。
+- 下一步
+	- 恢复可观测的 Computer Use 输出或改用可截图的 UI 自动化通道。
+	- 通过 Obsidian 真实交互继续验证
+		- 展示 `Journal/260810.md` 和 `Journal/2026-07-08.md`。
+		- 按 `journalDate` 倒序排序。
+		- reload 后源文件同步刷新。
+		- 大量 Journal 文件下的 UI warm open 和 modify-to-UI p95。

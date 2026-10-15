@@ -1,33 +1,53 @@
-# Roam In Ob
+# Roam Workspace
 
-Roam In Ob provides a Roam-like journal and page-stream experience for connected Markdown notes.
+English | [简体中文](README.zh-CN.md)
 
-> [!IMPORTANT]
-> This repository is an early development snapshot. It has not been accepted into the Obsidian Community directory and should not be treated as a stable release.
+Edit journals, connected pages, and recent activity in one Obsidian workspace. This repository contains the current local integration based on source commit `55818810dae2d28ca065843905a77436051258d8` (2026-10-09), replacing the older Roam In Ob snapshot.
 
 ## Features
 
-- Edit multiple journal notes in a continuous stream.
-- Filter journal notes by time range, folder, tag, and preset.
-- Navigate pages and linked notes through Page Stream and related views.
-- Use embedded Markdown editors without leaving the stream.
-- Support incremental refresh, external-change synchronization, and export workflows.
+- **Journal**: continuous daily-note or folder editing, date ranges, sorting, presets, and Markdown export.
+- **Page Stream**: keep several connected pages together with embedded Markdown editors.
+- **Navigation**: recent files/tasks and filters in one panel.
+- **List Heading and Outliner**: compact heading/list navigation and scoped list editing.
 
-## Development
+## Install
 
-```bash
-pnpm install
-pnpm run lint
+Download `main.js`, `manifest.json`, and `styles.css` from the [0.1.0 release](https://github.com/PkuLilBoat/roam-workspace/releases/tag/0.1.0). Put all three files directly in `<vault>/<configDir>/plugins/roam-workspace/` (`configDir` is usually `.obsidian`). Reload Obsidian, allow community plugins if needed, and enable **Roam Workspace**. Source ZIP downloads do not contain `main.js`.
+
+Back up an existing plugin folder before updating and preserve `data.json`. The plugin ID is `roam-workspace`; an older `roam-in-ob` or Daily Notes Editor installation is separate. Disable overlapping plugins when checking compatibility, and do not delete or migrate their data automatically.
+
+This is a development snapshot for manual installation. It is not listed in the Obsidian Community directory. The manifest declares Obsidian 1.8.7 or newer and mobile support, but this snapshot has not been independently validated across minimum-version and mobile platforms. Start with a test vault.
+
+## Quick start and settings
+
+Open the command palette and run **Roam Workspace: Open journal stream**, **Open page stream**, **Open roam navigation**, or **Open list heading**. Choose the journal folder in plugin settings; the default is `Journal`. Settings also control startup behavior, date range, presets, source paths, frontmatter, backlinks, navigation filters, recent tasks, and Outliner scope. Recent tasks are disabled by default.
+
+## Privacy and AI
+
+Notes and plugin settings stay in the vault. This plugin does not include an AI service, an AI account, or an MCP server. An external local AI assistant can help install the three files and edit settings; its own access and privacy policy are separate. Personal `data.json`, notes, and local deployment targets are not included in this release. The local multi-vault deployment list is intentionally empty in the public copy; installers should not run the author's deployment scripts.
+
+## Build
+
+```sh
+pnpm install --frozen-lockfile
 pnpm run build
 pnpm run test:journal
+pnpm run test:compat-quality
+pnpm run test:navigation
+pnpm run lint
 ```
 
-The plugin ID is `roam-in-ob`. Development and audit scripts that operate on a vault require the `ROAM_IN_OB_VAULT_ROOT` environment variable.
+`build` includes Svelte/TypeScript checking and writes `main.js`, `styles.css`, and build fingerprints. Consult the release notes for actual check results. Runtime audit scripts are maintainer tools with a fixed local TEST-vault boundary, not general installation commands.
 
-## Provenance and licensing status
+## Provenance and license
 
-Roam In Ob began as a derivative of [Daily Notes Editor](https://github.com/Quorafind/Obsidian-Daily-Notes-Editor). Parts of the embedded editor implementation also originate from [Hover Editor](https://github.com/nothingislost/obsidian-hover-editor), and the project uses [Obsidian Daily Notes Interface](https://github.com/liamcain/obsidian-daily-notes-interface) and [monkey-around](https://github.com/pjeby/monkey-around).
+Derived from [Daily Notes Editor](https://github.com/Quorafind/Obsidian-Daily-Notes-Editor), with embedded-editor origins in [Hover Editor](https://github.com/nothingislost/obsidian-hover-editor). See [third-party notices](THIRD_PARTY_NOTICES.md) and the [historical README](docs/UPSTREAM-README.md).
 
-The Daily Notes Editor repository does not currently publish a root license. This repository is public for development transparency, but no new license is asserted over inherited code while provenance and distribution rights remain unresolved. Do not redistribute release builds without independently verifying the applicable permissions.
+The earlier repository records unresolved root licensing for inherited Daily Notes Editor code. This update preserves that status and does not claim a new blanket MIT license or clear inherited distribution rights. The Outliner module retains its own MIT notice and license. This development publication is not a claim of Community-directory approval or production readiness.
 
-Attribution and third-party notices will be expanded before any Community-directory submission.
+## Feedback and community
+
+Use [GitHub Issues](https://github.com/PkuLilBoat/roam-workspace/issues) for public feedback. Optionally scan the QR code to add my WeChat and join lifelong-learner and discussion groups about learning, Obsidian, knowledge management, and productivity. Joining is not required to use the plugin.
+
+<img src="assets/wechat.jpg" alt="Optional WeChat contact QR code" width="220">

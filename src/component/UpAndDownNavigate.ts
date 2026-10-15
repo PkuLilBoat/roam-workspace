@@ -3,6 +3,7 @@ import {
     Editor,
     editorInfoField,
     EditorPosition,
+    type MarkdownFileInfo,
     MarkdownView,
     TFile,
     WorkspaceLeaf,
@@ -38,9 +39,12 @@ export function getEditorView(leaf: WorkspaceLeaf): EditorView | null {
     const view = leaf.view;
     if (!(view instanceof MarkdownView)) return null;
 
-    // Access the CodeMirror editor instance
-    // @ts-ignore - Accessing private property
-    return view.editor.cm;
+    return EditorView.findFromDOM(view.contentEl);
+}
+
+function getEditorLeaf(info: MarkdownFileInfo | undefined): WorkspaceLeaf | null {
+    if (!info || !("leaf" in info)) return null;
+    return info.leaf instanceof WorkspaceLeaf ? info.leaf : null;
 }
 
 /**
@@ -133,18 +137,12 @@ function navigateToAdjacentLeaf(
     );
 
     // Focus the editor
-    setTimeout(() => {
-        // Try different methods to ensure focus
-        if (targetLeaf.view instanceof MarkdownView) {
-            // @ts-ignore - Accessing private property
-            if (targetLeaf.view.editMode && targetLeaf.view.editMode.editor) {
-                // @ts-ignore - Accessing private property
-                targetLeaf.view.editMode.editor.focus();
-            } else {
-                editor.focus();
-            }
-        }
-    }, 10);
+    const focusEditor = () => {
+        if (getEditor(targetLeaf) === editor) editor.focus();
+    };
+    const ownerWindow = targetLeaf.containerEl.ownerDocument.defaultView;
+    if (ownerWindow) ownerWindow.setTimeout(focusEditor, 10);
+    else focusEditor();
 
     return true;
 }
@@ -153,8 +151,7 @@ function navigateToAdjacentLeaf(
  * Check if frontmatter is hidden in the current view
  */
 function isFrontmatterHidden(plugin: DailyNoteViewPlugin): boolean {
-    // @ts-ignore - Accessing settings property
-    return plugin.settings?.hideFrontmatter === true;
+    return plugin.settings.hideFrontmatter === true;
 }
 
 /**
@@ -207,17 +204,15 @@ export function createUpDownNavigationExtension(
             key: "ArrowUp",
             run: (view) => {
                 if (!view.state) return false;
-                // @ts-ignore
-                const infoView = view.state.field(editorInfoField);
+                const infoView = view.state.field(editorInfoField, false);
 
                 // Get the current file
-                // @ts-ignore
-                const currentLeaf = infoView?.leaf;
-                const currentFile = currentLeaf?.view?.file;
+                const currentLeaf = getEditorLeaf(infoView);
+                const currentFile = infoView?.file;
 
                 // Check if we're at the first visible line (considering frontmatter)
                 if (
-                    currentFile &&
+                    currentFile instanceof TFile &&
                     isAtFirstVisibleLine(view, currentFile, app, plugin)
                 ) {
                     if (
@@ -240,12 +235,10 @@ export function createUpDownNavigationExtension(
                 const pos = view.state.selection.main.head;
                 const line = view.state.doc.lineAt(pos);
 
-                // @ts-ignore
-                const infoView = view.state.field(editorInfoField);
+                const infoView = view.state.field(editorInfoField, false);
 
                 // Get the current file
-                // @ts-ignore
-                const currentLeaf = infoView?.leaf;
+                const currentLeaf = getEditorLeaf(infoView);
 
                 // If cursor is at the last line and at the end of the line
                 const lastLineNumber = view.state.doc.lines;

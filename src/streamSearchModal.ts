@@ -139,10 +139,11 @@ export class StreamSearchModal extends Modal {
                     type: "button",
                     role: "option",
                     "aria-selected": String(index === this.selectedIndex),
+                    "aria-label": `Open ${result.document.title}`,
+                    title: result.document.path,
                 },
             });
             button.createDiv({ cls: "roam-stream-search-result-title", text: result.document.title });
-            button.createDiv({ cls: "roam-stream-search-result-snippet", text: result.snippet });
             button.addEventListener("mouseenter", () => this.selectIndex(index));
             button.addEventListener("click", () => void this.activate(index));
         }

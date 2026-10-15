@@ -1,5 +1,10 @@
 import { TimeRange } from "./time";
 import type { NavigationViewId } from "../roamTypes";
+import type { NavigationSectionCollapsed } from "../navigation/sectionState";
+import type { RecentTaskBlockRecord } from "../navigation/recentTaskBlocks";
+import type { RecentFilePropertyFilters } from "../navigation/recentMultiFilter";
+
+export type OutlinerScope = "off" | "stream-only" | "vault-wide";
 
 export interface DailyNoteSettings {
     hideFrontmatter: boolean;
@@ -12,7 +17,16 @@ export interface DailyNoteSettings {
     showSourcePath: boolean;
     enableExportMarkdown: boolean;
     navigationViews: NavigationViewId[];
+    navigationSectionCollapsed: NavigationSectionCollapsed;
+    recentFileClassFilter: string[];
+    recentFileTagsFilter: string[];
+    recentFilePropertyFilters: RecentFilePropertyFilters;
     recentFiles: string[];
+    showRecentTasks: boolean;
+    recentTaskBlocks: RecentTaskBlockRecord[];
+    recentTaskTagsFilter: string[];
+    recentTaskPagesFilter: string[];
+    outlinerScope: OutlinerScope;
 
     preset: {
         type: "folder" | "tag";

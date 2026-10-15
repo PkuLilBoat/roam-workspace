@@ -1,5 +1,18 @@
 import "obsidian";
-import { Plugin, SuggestModal, TFile, View, WorkspaceLeaf } from "obsidian";
+import {
+    EditorPosition,
+    Loc,
+    MarkdownPreviewRenderer,
+    MarkdownSubView,
+    Plugin,
+    PluginManifest,
+    SuggestModal,
+    TFile,
+    TFolder,
+    View,
+    WorkspaceItem,
+    WorkspaceLeaf,
+} from "obsidian";
 
 interface InternalPlugins {
     switcher: QuickSwitcherPlugin;
@@ -175,7 +188,6 @@ declare module "obsidian" {
 
     interface View {
         iconEl: HTMLElement;
-        file: TFile;
 
         setMode(mode: MarkdownSubView): Promise<void>;
 

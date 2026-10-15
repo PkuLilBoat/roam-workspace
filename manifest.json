@@ -1,10 +1,15 @@
 {
-	"id": "roam-in-ob",
-	"name": "Roam In Ob",
+	"id": "roam-workspace",
+	"name": "Roam Workspace",
 	"version": "0.1.0",
-	"minAppVersion": "0.15.0",
-	"description": "Navigate and edit connected journal notes in a Roam-like stream.",
-	"author": "PkuLilBoat",
-	"authorUrl": "https://github.com/PkuLilBoat",
+	"minAppVersion": "1.8.7",
+	"description": "Journal, page stream, and recent activity navigation in one workspace.",
+	"author": "Boninall",
+	"authorUrl": "https://github.com/Quorafind",
+	"fundingUrl": {
+		"Buy Me a Coffee": "https://www.buymeacoffee.com/boninall",
+		"爱发电": "https://afdian.net/a/boninall",
+		"支付宝": "https://cdn.jsdelivr.net/gh/Quorafind/.github@main/IMAGE/%E6%94%AF%E4%BB%98%E5%AE%9D%E4%BB%98%E6%AC%BE%E7%A0%81.jpg"
+	},
 	"isDesktopOnly": false
 }

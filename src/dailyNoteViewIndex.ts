@@ -1,23 +1,21 @@
 import {
     Editor,
+    FileSystemAdapter,
     MarkdownView,
     Notice,
     Plugin,
-    OpenViewState,
-    normalizePath,
     TFile,
     Workspace,
-    WorkspaceContainer,
-    WorkspaceItem,
     WorkspaceLeaf,
     moment,
-    requireApiVersion,
     TFolder,
+    View,
     debounce,
 } from "obsidian";
 
-import { around } from "monkey-around";
-import { DailyNoteEditor, isDailyNoteLeaf } from "./leafView";
+import { EditorView as CodeMirrorEditorView } from "@codemirror/view";
+import { installEmbeddedWorkspaceCompatibility } from "./compat/EmbeddedWorkspaceCompatibility";
+import { isDailyNoteLeaf } from "./leafView";
 import "./style/index.css";
 import { addIconList } from "./utils/icon";
 import {
@@ -28,23 +26,27 @@ import {
 import { TimeField, TimeRange } from "./types/time";
 import {
     buildDailyViewState,
+    buildDefaultJournalStreamViewState,
     buildJournalFolderViewState,
     buildTagViewState,
     canCopyJournalStreamMarkdown,
 } from "./utils/viewState";
 import { restoreDailyNoteSettings } from "./utils/settingsState";
-import { nextSettingsRevision } from "./utils/settingsRevision";
-import {
-    getAllDailyNotes,
-    getDailyNote,
-    createDailyNote,
-} from "obsidian-daily-notes-interface";
 import { createUpDownNavigationExtension } from "./component/UpAndDownNavigate";
-import { createOutlinerPasteNormalizeExtension } from "./component/OutlinerPasteNormalize";
+import { OutlinerModule } from "./outliner";
+import {
+    outlinerBlockSelectionField,
+    setOutlinerBlockSelection,
+} from "./outliner/extension";
 // import { setActiveEditorExt } from "./component/SetActiveEditor";
-import { DAILY_NOTE_VIEW_TYPE, DailyNoteView } from "./dailyNoteView";
+import {
+    JOURNAL_VIEW_TYPE,
+    JournalV2View,
+} from "./journal-v2";
 import { RoamListHeadingView } from "./listHeadingView";
-import { ListHeadingMode } from "./listHeadingTypes";
+import {
+    LIST_HEADING_DEPTHS,
+} from "./listHeadingTypes";
 import { RoamNavigationView } from "./navigationView";
 import { PageStreamView } from "./pageStreamView";
 import { PageStreamNativeRouter } from "./pageStreamNativeRouter";
@@ -61,22 +63,48 @@ import {
     buildBlockLink,
     createBlockId,
 } from "./utils/blockLink";
-import { normalizeOutlinerPaste } from "./utils/outlinerPaste";
+import {
+    adaptPasteToListContext,
+    normalizeOutlinerPaste,
+    planListContextPaste,
+} from "./outliner/paste";
+import {
+    adjustBlockSelection,
+    createBlockSelection,
+    resolveBlockSelection,
+    serializeBlockSelection,
+} from "./outliner/selection";
 import {
     recordRecentPath,
     removeRecentPath,
     renameRecentPath,
+    shouldRecordRecentEditorChange,
 } from "./utils/recentFiles";
-
+import {
+    reconcileRecentTaskRecordsForPath,
+    removeRecentTaskPath,
+    renameRecentTaskPath,
+    resolveRecentTaskRecord,
+    type RecentTaskBlockRecord,
+} from "./navigation/recentTaskBlocks";
+import { StreamPropertiesState } from "./utils/streamProperties";
 export default class DailyNoteViewPlugin extends Plugin {
+    readonly streamProperties = new StreamPropertiesState();
     lastActiveFile: TFile;
     private lastCheckedDay: string;
-    private settingsRevision = 0;
     private lastUiAuditRequestId = "";
+    private processedUiAuditRequests = new Map<string, string>();
+    private uiAuditPollingEnabled = false;
     private auditDebugSeq = 0;
     private isProcessingUiAuditRequest = false;
     private outlineSourcePath: string | null = null;
+    private outlinerModule?: OutlinerModule;
     private persistRecentFiles = debounce(
+        () => void this.saveSettings(),
+        500,
+        true
+    );
+    private persistRecentTasks = debounce(
         () => void this.saveSettings(),
         500,
         true
@@ -87,21 +115,16 @@ export default class DailyNoteViewPlugin extends Plugin {
     async onload() {
         this.addSettingTab(new DailyNoteSettingTab(this.app, this));
         await this.loadSettings();
-        if (!this.settings.recentFiles.length) {
-            this.settings.recentFiles = this.app.workspace
-                .getLastOpenFiles()
-                .filter((path) => {
-                    const file = this.app.vault.getAbstractFileByPath(path);
-                    return file instanceof TFile && file.extension === "md";
-                });
-            this.persistRecentFiles();
+        this.uiAuditPollingEnabled = await this.app.vault.adapter.exists(
+            `.obsidian/plugins/${this.manifest.id}/ui-audit-enabled`
+        );
+        if (this.uiAuditPollingEnabled) {
+            void this.writeAuditDebug("onload", {
+                version: this.manifest.version,
+                journalFolder: this.settings.journalFolder,
+            });
         }
-        void this.writeAuditDebug("onload", {
-            version: this.manifest.version,
-            journalFolder: this.settings.journalFolder,
-        });
-        this.patchWorkspace();
-        this.patchWorkspaceLeaf();
+        installEmbeddedWorkspaceCompatibility(this);
         new PageStreamNativeRouter(this).install();
         addIconList();
 
@@ -116,11 +139,12 @@ export default class DailyNoteViewPlugin extends Plugin {
                 }),
                 // setActiveEditorExt({ app: this.app, plugin: this }),
             ]);
-        this.registerEditorExtension(createOutlinerPasteNormalizeExtension());
+        this.outlinerModule = new OutlinerModule(this);
+        this.outlinerModule.load();
 
         this.registerView(
-            DAILY_NOTE_VIEW_TYPE,
-            (leaf: WorkspaceLeaf) => new DailyNoteView(leaf, this)
+            JOURNAL_VIEW_TYPE,
+            (leaf: WorkspaceLeaf) => new JournalV2View(leaf, this)
         );
         this.registerView(
             ROAM_NAVIGATION_VIEW_TYPE,
@@ -135,64 +159,98 @@ export default class DailyNoteViewPlugin extends Plugin {
             (leaf: WorkspaceLeaf) => new RoamListHeadingView(leaf, this)
         );
         this.registerEvent(
-            this.app.workspace.on("file-open", (file) => {
-                if (file instanceof TFile) this.recordRecentFile(file);
+            this.app.workspace.on("editor-change", (editor, info) => {
+                const file = info.file;
+                const contentEl = info instanceof MarkdownView
+                    ? info.contentEl
+                    : undefined;
+                const activeElement =
+                    contentEl?.ownerDocument.activeElement ?? document.activeElement;
+                if (
+                    file instanceof TFile &&
+                    shouldRecordRecentEditorChange(
+                        editor,
+                        { contentEl },
+                        activeElement
+                    )
+                ) {
+                    this.recordRecentFile(file);
+                    if (editor.hasFocus()) {
+                        this.recordRecentTask(editor, file);
+                    }
+                }
             })
         );
         this.registerEvent(
             this.app.vault.on("rename", (file, oldPath) => {
-                if (file instanceof TFile) this.renameRecentFile(oldPath, file.path);
+                if (file instanceof TFile) {
+                    this.renameRecentFile(oldPath, file.path);
+                    this.renameRecentTasks(oldPath, file.path);
+                }
             })
         );
         this.registerEvent(
             this.app.vault.on("delete", (file) => {
-                if (file instanceof TFile) this.removeRecentFile(file.path);
+                if (file instanceof TFile) {
+                    this.removeRecentFile(file.path);
+                    this.removeRecentTasks(file.path);
+                }
             })
         );
+        this.registerEvent(
+            this.app.vault.on("modify", (file) => {
+                if (file instanceof TFile && file.extension === "md") {
+                    void this.reconcileRecentTasksForFile(file);
+                }
+            })
+        );
+        this.app.workspace.onLayoutReady(() => {
+            if (this.settings.showRecentTasks) void this.reconcileAllRecentTasks();
+        });
 
         this.addRibbonIcon(
             "layout-dashboard",
-            "Open Roam navigation",
+            "Open roam navigation",
             () => this.openRoamNavigationView()
         );
         this.addRibbonIcon(
             "calendar-range",
-            "Open Journal stream",
+            "Open journal stream",
             () => this.openDefaultJournalView()
         );
         this.addRibbonIcon(
             "panel-right-open",
-            "Open Page stream",
+            "Open page stream",
             () => this.openPageStreamView()
         );
         this.addRibbonIcon(
             "list-tree",
-            "Open List heading",
+            "Open list heading",
             () => this.openListHeadingView()
         );
         this.addCommand({
             id: "open-roam-navigation",
-            name: "Open Roam navigation",
+            name: "Open roam navigation",
             callback: () => this.openRoamNavigationView(),
         });
         this.addCommand({
             id: "open-journal-stream",
-            name: "Open Journal stream",
+            name: "Open journal stream",
             callback: () => this.openDefaultJournalView(),
         });
         this.addCommand({
             id: "open-page-stream",
-            name: "Open Page stream",
+            name: "Open page stream",
             callback: () => this.openPageStreamView(),
         });
         this.addCommand({
             id: "open-list-heading",
-            name: "Open List heading",
+            name: "Open list heading",
             callback: () => this.openListHeadingView(),
         });
         this.addCommand({
             id: "open-current-file-in-page-stream",
-            name: "Open current file in Page stream",
+            name: "Open current file in page stream",
             checkCallback: (checking) => {
                 const file = this.app.workspace.getActiveFile();
                 const canOpen = file instanceof TFile && file.extension === "md";
@@ -224,90 +282,79 @@ export default class DailyNoteViewPlugin extends Plugin {
         });
         this.addCommand({
             id: "copy-journal-stream-markdown",
-            name: "Copy Journal stream as Markdown",
+            name: "Copy journal stream as Markdown",
             checkCallback: (checking) => {
-                const view = this.getCurrentJournalView();
+                const view = this.getCurrentJournalExportView();
                 const canCopy = canCopyJournalStreamMarkdown(
                     this.settings.enableExportMarkdown,
                     !!view
                 );
                 if (checking) return canCopy;
                 if (canCopy && view) {
-                    view.copyCurrentJournalMarkdown();
+                    void view.copyCurrentJournalMarkdown();
                 }
                 return canCopy;
             },
         });
         this.addCommand({
-            id: "write-journal-stream-ui-audit",
-            name: "Write Journal stream UI audit",
-            callback: () => this.writeJournalStreamUiAuditFromRequest(),
-        });
-        this.addCommand({
-            id: "write-roam-workspace-ui-audit",
-            name: "Write Roam workspace UI audit",
+            id: "write-ui-audit",
+            name: "Write UI audit",
             callback: () => this.writeRoamWorkspaceUiAuditFromRequest(),
         });
-        this.initCssRules();
-
-        // Create daily note and open the Daily Notes Editor on startup if enabled
-        if (this.settings.createAndOpenOnStartup) {
-            this.app.workspace.onLayoutReady(async () => {
-                // First ensure today's daily note exists
-                if (this.settings.defaultOpenMode === "daily") {
-                    await this.ensureTodaysDailyNoteExists();
-                }
-                if (
-                    this.app.workspace.getLeavesOfType(DAILY_NOTE_VIEW_TYPE)
-                        .length > 0
-                )
-                    return;
-                await this.openDefaultJournalView();
+        this.app.workspace.onLayoutReady(() => {
+            void this.restoreJournalView().catch((error) => {
+                console.error("Failed to restore Journal view:", error);
+                new Notice("Could not finish restoring the journal view.");
             });
-        }
+        });
 
         // Also check periodically (every 15 minutes) for day changes
         this.registerInterval(
-            window.setInterval(this.checkDayChange.bind(this), 1000 * 60 * 15)
+            window.setInterval(() => {
+                void this.checkDayChange().catch((error: unknown) => {
+                    console.error("Failed to refresh journal for a new day:", error);
+                    new Notice("Could not refresh the journal for the new day.");
+                });
+            }, 1000 * 60 * 15)
         );
-        const auditRequestTimer = window.setTimeout(() => {
-            void this.writeAuditDebug("audit-timer-start", {
-                lastUiAuditRequestId: this.lastUiAuditRequestId,
-            });
-            void this.checkJournalStreamUiAuditRequest();
-            this.registerInterval(
-                window.setInterval(
-                    () => {
-                        void this.checkJournalStreamUiAuditRequest();
-                    },
-                    2000
-                )
-            );
-        }, 8000);
-        this.register(() => window.clearTimeout(auditRequestTimer));
+        if (this.uiAuditPollingEnabled) {
+            const auditRequestTimer = window.setTimeout(() => {
+                void this.writeAuditDebug("audit-timer-start", {
+                    lastUiAuditRequestId: this.lastUiAuditRequestId,
+                });
+                void this.checkAllJournalStreamUiAuditRequests();
+                this.registerInterval(
+                    window.setInterval(
+                        () => {
+                            void this.checkAllJournalStreamUiAuditRequests();
+                        },
+                        2000
+                    )
+                );
+            }, 8000);
+            this.register(() => window.clearTimeout(auditRequestTimer));
+        }
 
         this.registerEvent(
             this.app.workspace.on("file-menu", (menu, file, source, leaf) => {
                 if (file instanceof TFolder) {
                     menu.addItem((item) => {
                         item.setIcon("calendar-range");
-                        item.setTitle("Open Journal Stream for this folder");
+                        item.setTitle("Open journal stream for this folder");
                         item.onClick(() => {
-                            this.openFolderView(
+                            void this.openFolderView(
                                 file.path,
                                 "journalDate",
                                 this.settings.initialRange
-                            );
+                            ).catch((error: unknown) => {
+                                console.error("Failed to open journal folder:", error);
+                                new Notice("Could not open the journal folder.");
+                            });
                         });
                     });
                 }
             })
         );
-    }
-
-    onunload() {
-        document.body.toggleClass("daily-notes-hide-frontmatter", false);
-        document.body.toggleClass("daily-notes-hide-backlinks", false);
     }
 
     async openRoamNavigationView(): Promise<void> {
@@ -329,19 +376,28 @@ export default class DailyNoteViewPlugin extends Plugin {
     ): Promise<PageStreamView | null> {
         const { reveal = true, active = true } = options;
         const workspace = this.app.workspace;
-        let leaf = workspace.getLeavesOfType(ROAM_PAGE_STREAM_VIEW_TYPE)[0];
+        const pageStreamLeaves = workspace.getLeavesOfType(
+            ROAM_PAGE_STREAM_VIEW_TYPE
+        );
+        let leaf =
+            pageStreamLeaves.find((candidate) =>
+                candidate.containerEl.isShown()
+            ) ?? pageStreamLeaves[0];
+        let layoutChanged = false;
         if (!leaf) {
             leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
             await leaf.setViewState({
                 type: ROAM_PAGE_STREAM_VIEW_TYPE,
                 active,
             });
+            layoutChanged = true;
         }
         const isVisible = leaf.containerEl.isShown();
         if (reveal && (active || !isVisible)) {
             await workspace.revealLeaf(leaf);
+            layoutChanged = true;
         }
-        workspace.requestSaveLayout();
+        if (layoutChanged) workspace.requestSaveLayout();
         return leaf.view instanceof PageStreamView ? leaf.view : null;
     }
 
@@ -383,24 +439,39 @@ export default class DailyNoteViewPlugin extends Plugin {
         source: PageTargetSource,
         target?: Partial<PageTarget>,
         options: { reveal?: boolean; active?: boolean } = {}
-    ): Promise<void> {
-        const previousLeaf = options.active === false ? this.app.workspace.activeLeaf : null;
+    ): Promise<boolean> {
+        const previousLeaf = options.active === false
+            ? this.app.workspace.getActiveViewOfType(View)?.leaf ?? null
+            : null;
+        const activeEditor = this.app.workspace.activeEditor;
+        const embeddedLeaf = activeEditor instanceof MarkdownView
+            ? activeEditor.leaf
+            : null;
+        const focusLeaf = embeddedLeaf && previousLeaf &&
+            embeddedLeaf.parentLeaf === previousLeaf &&
+            isDailyNoteLeaf(embeddedLeaf)
+            ? embeddedLeaf
+            : previousLeaf;
         const view = await this.openPageStreamView(options);
-        if (!view) return;
+        if (!view) return false;
         view.pushTarget({
             ...buildFileTarget(file, source),
             ...target,
             path: file.path,
             source,
         });
-        if (previousLeaf) {
-            this.app.workspace.setActiveLeaf(previousLeaf, { focus: true });
+        if (focusLeaf) {
+            this.app.workspace.setActiveLeaf(focusLeaf, { focus: true });
             window.setTimeout(() => {
-                if (this.app.workspace.activeLeaf !== previousLeaf) {
-                    this.app.workspace.setActiveLeaf(previousLeaf, { focus: true });
+                const focusRestored = focusLeaf === previousLeaf
+                    ? this.app.workspace.getActiveViewOfType(View)?.leaf === previousLeaf
+                    : this.app.workspace.activeEditor === activeEditor;
+                if (!focusRestored) {
+                    this.app.workspace.setActiveLeaf(focusLeaf, { focus: true });
                 }
             }, 80);
         }
+        return true;
     }
 
     private canCopyCurrentBlockLink(editor: Editor): boolean {
@@ -410,8 +481,8 @@ export default class DailyNoteViewPlugin extends Plugin {
     }
 
     async copyCurrentBlockLinkFromActiveMarkdown(): Promise<void> {
-        const view = this.app.workspace.activeLeaf?.view;
-        if (!(view instanceof MarkdownView)) {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view) {
             new Notice("Open a Markdown file to copy a block link.");
             return;
         }
@@ -422,7 +493,7 @@ export default class DailyNoteViewPlugin extends Plugin {
         }
         const editor = view.editor;
         if (editor.somethingSelected() || !this.canCopyCurrentBlockLink(editor)) {
-            new Notice("Current line cannot receive a block id.");
+            new Notice("Current line cannot receive a block ID.");
             return;
         }
         await this.copyCurrentBlockLink(editor, view);
@@ -443,7 +514,7 @@ export default class DailyNoteViewPlugin extends Plugin {
         const originalLine = editor.getLine(cursor.line);
         const result = appendBlockIdToLine(originalLine, createBlockId());
         if (result.reason === "unsupported") {
-            new Notice("Current line cannot receive a block id.");
+            new Notice("Current line cannot receive a block ID.");
             return;
         }
 
@@ -464,59 +535,79 @@ export default class DailyNoteViewPlugin extends Plugin {
     }
 
     async openDailyNoteEditor(selectedRange?: TimeRange) {
-        const workspace = this.app.workspace;
-        const leaf = this.getMatchingViewLeaf("daily", "", "journalDate");
         const range = selectedRange ?? this.settings.initialRange;
+        await this.openJournalState(buildDailyViewState(range));
+    }
+
+    async openDefaultJournalView() {
+        await this.openJournalState(
+            buildDefaultJournalStreamViewState(this.settings),
+            true
+        );
+    }
+
+    private async openJournalState(
+        state: Record<string, unknown>,
+        configuredView = false
+    ): Promise<void> {
+        const workspace = this.app.workspace;
+        const selectionMode = state.selectionMode as "daily" | "folder" | "tag";
+        const target = typeof state.target === "string" ? state.target : "";
+        const timeField = state.timeField as TimeField;
+        const matchingLeaf = this.getMatchingViewLeaf(
+            selectionMode,
+            target,
+            timeField
+        );
+        const configuredLeaves = configuredView
+            ? this.getConfiguredJournalLeaves()
+            : [];
+        const leaf = configuredLeaves[0] ?? matchingLeaf;
+
         await leaf.setViewState({
-            type: DAILY_NOTE_VIEW_TYPE,
-            state: buildDailyViewState(range),
+            type: JOURNAL_VIEW_TYPE,
+            state,
         });
-        const view = leaf.view as DailyNoteView;
-        view.setSelectionMode("daily", "", false);
-        view.setTimeField("journalDate", false);
-        view.setSelectedRange(range, false);
+        if (!(leaf.view instanceof JournalV2View)) {
+            throw new Error("Journal view did not become active");
+        }
+
+        if (configuredView) this.detachOtherConfiguredJournalLeaves(leaf);
         await workspace.revealLeaf(leaf);
         workspace.requestSaveLayout();
     }
 
-    async openDefaultJournalView() {
-        if (this.settings.defaultOpenMode === "daily") {
-            await this.openDailyNoteEditor(this.settings.initialRange);
-            return;
-        }
+    private getConfiguredJournalLeaves(): WorkspaceLeaf[] {
+        return this.app.workspace
+            .getLeavesOfType(JOURNAL_VIEW_TYPE)
+            .filter(
+                (leaf) =>
+                    leaf.view instanceof JournalV2View &&
+                    this.isConfiguredJournalView(leaf.view)
+            );
+    }
 
-        await this.ensureTodaysJournalFileExists();
-        this.detachNonMatchingJournalStreamLeaves(
-            "folder",
-            this.settings.journalFolder,
-            "journalDate"
-        );
-        await this.openFolderView(
-            this.settings.journalFolder,
-            "journalDate",
-            this.settings.initialRange
+    private detachOtherConfiguredJournalLeaves(keepLeaf: WorkspaceLeaf): void {
+        for (const leaf of this.getConfiguredJournalLeaves()) {
+            if (leaf !== keepLeaf) leaf.detach();
+        }
+    }
+
+    private isConfiguredJournalView(view: JournalV2View): boolean {
+        if (this.settings.defaultOpenMode === "daily") {
+            return view.selectionMode === "daily" && view.timeField === "journalDate";
+        }
+        return (
+            view.selectionMode === "folder" &&
+            view.target === this.settings.journalFolder &&
+            view.timeField === "journalDate"
         );
     }
 
-    async ensureTodaysJournalFileExists(): Promise<TFile | null> {
-        const folderPath = normalizePath(this.settings.journalFolder);
-        const folder = this.app.vault.getAbstractFileByPath(folderPath);
-        if (!(folder instanceof TFolder)) {
-            new Notice(`Journal folder not found: ${folderPath}`);
-            return null;
-        }
-
-        const filePath = normalizePath(`${folderPath}/${formatJournalDateFilename(new Date())}.md`);
-        const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-        if (existingFile instanceof TFile) return existingFile;
-
-        try {
-            return await this.app.vault.create(filePath, "");
-        } catch (error) {
-            console.error("Failed to create today's Journal file:", error);
-            new Notice(`Failed to create today's Journal file: ${filePath}`);
-            return null;
-        }
+    private async restoreJournalView(): Promise<void> {
+        if (!this.settings.createAndOpenOnStartup) return;
+        if (this.app.workspace.getLeavesOfType(JOURNAL_VIEW_TYPE).length > 0) return;
+        await this.openDefaultJournalView();
     }
 
     async openFolderView(
@@ -524,25 +615,10 @@ export default class DailyNoteViewPlugin extends Plugin {
         timeField: TimeField = "mtime",
         selectedRange?: TimeRange
     ) {
-        const workspace = this.app.workspace;
-        const leaf = this.getMatchingViewLeaf("folder", folderPath, timeField);
-        await leaf.setViewState({
-            type: DAILY_NOTE_VIEW_TYPE,
-            state: buildJournalFolderViewState(
-                folderPath,
-                timeField,
-                selectedRange ?? this.settings.initialRange
-            ),
-        });
-
-        // Get the view and set the selection mode to folder
-        const view = leaf.view as DailyNoteView;
-        view.setSelectionMode("folder", folderPath, false);
-        view.setTimeField(timeField, false);
-        view.setSelectedRange(selectedRange ?? this.settings.initialRange, false);
-
-        await workspace.revealLeaf(leaf);
-        workspace.requestSaveLayout();
+        const range = selectedRange ?? this.settings.initialRange;
+        await this.openJournalState(
+            buildJournalFolderViewState(folderPath, timeField, range)
+        );
     }
 
     async openTagView(
@@ -550,22 +626,8 @@ export default class DailyNoteViewPlugin extends Plugin {
         timeField: TimeField = "mtime",
         selectedRange?: TimeRange
     ) {
-        const workspace = this.app.workspace;
-        const leaf = this.getMatchingViewLeaf("tag", tagName, timeField);
         const range = selectedRange ?? this.settings.initialRange;
-        await leaf.setViewState({
-            type: DAILY_NOTE_VIEW_TYPE,
-            state: buildTagViewState(tagName, timeField, range),
-        });
-
-        // Get the view and set the selection mode to tag
-        const view = leaf.view as DailyNoteView;
-        view.setSelectionMode("tag", tagName, false);
-        view.setTimeField(timeField, false);
-        view.setSelectedRange(range, false);
-
-        await workspace.revealLeaf(leaf);
-        workspace.requestSaveLayout();
+        await this.openJournalState(buildTagViewState(tagName, timeField, range));
     }
 
     getMatchingViewLeaf(
@@ -573,15 +635,14 @@ export default class DailyNoteViewPlugin extends Plugin {
         target: string,
         timeField: TimeField
     ): WorkspaceLeaf {
-        for (const leaf of this.app.workspace.getLeavesOfType(
-            DAILY_NOTE_VIEW_TYPE
-        )) {
+        const journalLeaves = this.app.workspace.getLeavesOfType(JOURNAL_VIEW_TYPE);
+        for (const leaf of journalLeaves) {
             const state = leaf.getViewState().state as {
                 selectionMode?: "daily" | "folder" | "tag";
                 target?: string;
                 timeField?: TimeField;
             };
-            const view = leaf.view as DailyNoteView;
+            const view = leaf.view as JournalV2View;
             const leafSelectionMode =
                 state?.selectionMode ?? view?.selectionMode ?? "daily";
             const leafTarget = state?.target ?? view?.target ?? "";
@@ -600,155 +661,37 @@ export default class DailyNoteViewPlugin extends Plugin {
         return this.app.workspace.getLeaf(true);
     }
 
-    detachNonMatchingJournalStreamLeaves(
-        selectionMode: "daily" | "folder" | "tag",
-        target: string,
-        timeField: TimeField
-    ) {
-        const leaves = this.app.workspace.getLeavesOfType(DAILY_NOTE_VIEW_TYPE);
-        for (const leaf of leaves) {
-            const view = leaf.view as DailyNoteView;
-            if (
-                view instanceof DailyNoteView &&
-                view.selectionMode === selectionMode &&
-                view.target === target &&
-                view.timeField === timeField
-            ) {
-                continue;
-            }
-            leaf.detach();
-        }
-    }
-
-    getCurrentJournalView(): DailyNoteView | null {
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (
-            activeLeaf?.view instanceof DailyNoteView &&
-            this.isUsableJournalView(activeLeaf.view)
-        ) {
-            return activeLeaf.view;
+    getCurrentJournalView(): JournalV2View | null {
+        const activeView = this.app.workspace.getActiveViewOfType(JournalV2View);
+        if (activeView && this.isUsableJournalView(activeView)) {
+            return activeView;
         }
 
-        const leaves = this.app.workspace.getLeavesOfType(DAILY_NOTE_VIEW_TYPE);
-        const journalLeaf = leaves.find(
-            (leaf) =>
-                leaf.view instanceof DailyNoteView &&
-                this.isUsableJournalView(leaf.view)
-        );
-        if (journalLeaf?.view instanceof DailyNoteView) return journalLeaf.view;
+        const leaves = this.app.workspace.getLeavesOfType(JOURNAL_VIEW_TYPE);
+        const configuredView = leaves
+            .map((leaf) => leaf.view)
+            .find(
+                (view): view is JournalV2View =>
+                    view instanceof JournalV2View &&
+                    this.isUsableJournalView(view)
+            );
+        if (configuredView) return configuredView;
 
-        const leaf = leaves[0];
-        return leaf?.view instanceof DailyNoteView ? leaf.view : null;
+        const view = leaves[0]?.view;
+        return view instanceof JournalV2View ? view : null;
     }
 
-    isUsableJournalView(view: DailyNoteView): boolean {
+    private getCurrentJournalExportView(): JournalV2View | null {
+        return this.getCurrentJournalView();
+    }
+
+    isUsableJournalView(view: JournalV2View): boolean {
         return (
             view.selectionMode === "folder" &&
             view.target === this.settings.journalFolder &&
             view.timeField === "journalDate"
         );
     }
-
-    async writeJournalStreamUiAudit(
-        options: {
-            silent?: boolean;
-            runId?: string;
-            view?: DailyNoteView | null;
-            copyExport?: boolean;
-            settingsToggle?: boolean;
-            previewEditSave?: boolean;
-            externalChangeReload?: boolean;
-            renameRefresh?: boolean;
-        } = {}
-    ) {
-        const outputPath = `.obsidian/plugins/${this.manifest.id}/ui-audit-latest.json`;
-        const view = options.view ?? this.getCurrentJournalView();
-        if (!view) {
-            await this.writeJournalStreamUiAuditPayload(outputPath, {
-                runId: options.runId ?? null,
-                status: "failed",
-                reason: "no-open-journal-stream-view",
-            });
-            if (!options.silent) new Notice("No open Journal Stream view to audit");
-            return;
-        }
-
-        await view.prepareAuditSnapshot();
-        const actions: Record<string, unknown> = {};
-        if (options.copyExport) {
-            actions.copyExport = await view.copyCurrentJournalMarkdownForAudit();
-        }
-        if (options.settingsToggle) {
-            actions.settingsToggle = await this.auditSettingsToggle(view);
-        }
-        if (options.previewEditSave) {
-            actions.previewEditSave = await view.previewEditSaveForAudit(
-                `journal-stream-preview-edit-save-${options.runId ?? Date.now()}`
-            );
-        }
-        if (options.externalChangeReload) {
-            actions.externalChangeReload =
-                await view.externalChangeReloadForAudit(
-                    `journal-stream-external-change-${options.runId ?? Date.now()}`
-                );
-        }
-        if (options.renameRefresh) {
-            actions.renameRefresh = await view.renameRefreshForAudit();
-        }
-        const snapshot = view.getAuditSnapshot();
-        if (!snapshot) {
-            await this.writeJournalStreamUiAuditPayload(outputPath, {
-                runId: options.runId ?? null,
-                status: "failed",
-                reason: "journal-stream-view-not-ready",
-                viewState: view.getState(),
-                actions,
-            });
-            if (!options.silent) new Notice("Journal Stream view is not ready to audit");
-            return;
-        }
-
-        await this.writeJournalStreamUiAuditPayload(outputPath, {
-            runId: options.runId ?? null,
-            status: "passed",
-            viewState: view.getState(),
-            snapshot,
-            ...(Object.keys(actions).length > 0 ? { actions } : {}),
-        });
-        if (!options.silent) {
-            new Notice(`Journal Stream UI audit written: ${outputPath}`);
-        }
-    }
-
-    async writeJournalStreamUiAuditFromRequest() {
-        const request = await this.readJournalStreamUiAuditRequest();
-        let requestedView: DailyNoteView | null = null;
-        if (request.openDefaultView) {
-            if (request.targetFolder) {
-                await this.openFolderView(
-                    request.targetFolder,
-                    "journalDate",
-                    request.selectedRange
-                );
-            } else {
-                await this.openDefaultJournalView();
-            }
-            requestedView = await this.waitForJournalStreamView(
-                request.targetFolder,
-                request.selectedRange
-            );
-        }
-        await this.writeJournalStreamUiAudit({
-            runId: request.runId,
-            view: requestedView,
-            copyExport: request.copyExport,
-            settingsToggle: request.settingsToggle,
-            previewEditSave: request.previewEditSave,
-            externalChangeReload: request.externalChangeReload,
-            renameRefresh: request.renameRefresh,
-        });
-    }
-
     async writeRoamWorkspaceUiAuditFromRequest() {
         const request = await this.readJournalStreamUiAuditRequest();
         await this.writeRoamWorkspaceUiAudit({
@@ -783,6 +726,23 @@ export default class DailyNoteViewPlugin extends Plugin {
                     ? actions.listHeading.reason
                     : undefined,
             });
+        }
+        if (options.pageStreamAudit) {
+            const pageStreamView = await this.openPageStreamView({
+                active: true,
+                reveal: true,
+            });
+            if (pageStreamView) {
+                this.app.workspace.setActiveLeaf(pageStreamView.leaf, { focus: false });
+                await this.app.workspace.revealLeaf(pageStreamView.leaf);
+                await new Promise((resolve) => window.setTimeout(resolve, 250));
+            }
+            actions.pageStreamMutationStability = pageStreamView
+                ? await pageStreamView.auditMutationStabilityForAudit()
+                : { status: "failed", reason: "page-stream-view-not-open" };
+            actions.pageStreamVisibleContentContinuity = pageStreamView
+                ? await pageStreamView.auditVisibleContentContinuityForAudit()
+                : { status: "failed", reason: "page-stream-view-not-open" };
         }
         if (options.blockLinkAudit) {
             await this.writeAuditDebug("roam-audit-block-link-start", {
@@ -862,6 +822,89 @@ export default class DailyNoteViewPlugin extends Plugin {
             const ariaLabels = buttons
                 .map((el) => el.getAttribute("aria-label") ?? "")
                 .filter(Boolean);
+            const viewEntryStyles = Array.from(
+                contentEl.querySelectorAll<HTMLElement>(".roam-nav-entry")
+            ).map((entry) => {
+                const style = window.getComputedStyle(entry);
+                const rect = entry.getBoundingClientRect();
+                const iconRect = entry
+                    .querySelector<HTMLElement>(".roam-nav-entry-icon")
+                    ?.getBoundingClientRect();
+                const label = entry.querySelector<HTMLElement>(
+                    ".roam-nav-entry-label"
+                );
+                const labelRect = label?.getBoundingClientRect();
+                const labelStyle = label ? window.getComputedStyle(label) : null;
+                return {
+                    interactive:
+                        entry.matches(":hover") || entry.matches(":focus-visible"),
+                    backgroundColor: style.backgroundColor,
+                    backgroundImage: style.backgroundImage,
+                    borderWidth: style.borderWidth,
+                    boxShadow: style.boxShadow,
+                    height: rect.height,
+                    paddingLeft: style.paddingLeft,
+                    columnGap: style.columnGap,
+                    iconWidth: iconRect?.width ?? null,
+                    iconLeftDelta: iconRect ? iconRect.left - rect.left : null,
+                    labelLeftDelta: labelRect ? labelRect.left - rect.left : null,
+                    labelFontSize: labelStyle?.fontSize ?? null,
+                    labelFontWeight: labelStyle?.fontWeight ?? null,
+                };
+            });
+            const inactiveViewEntryStyles = viewEntryStyles.filter(
+                (style) => !style.interactive
+            );
+            const viewEntriesAreContainerless =
+                viewEntryStyles.length === this.settings.navigationViews.length &&
+                inactiveViewEntryStyles.every(
+                    (style) =>
+                        (style.backgroundColor === "rgba(0, 0, 0, 0)" ||
+                            style.backgroundColor === "transparent") &&
+                        style.backgroundImage === "none" &&
+                        style.borderWidth === "0px" &&
+                        style.boxShadow === "none"
+                );
+            const fileEntryStyles = Array.from(
+                contentEl.querySelectorAll<HTMLElement>(".roam-nav-file")
+            ).map((entry) => {
+                const style = window.getComputedStyle(entry);
+                const beforeStyle = window.getComputedStyle(entry, "::before");
+                const afterStyle = window.getComputedStyle(entry, "::after");
+                return {
+                    interactive:
+                        entry.matches(":hover") || entry.matches(":focus-visible"),
+                    backgroundColor: style.backgroundColor,
+                    backgroundImage: style.backgroundImage,
+                    borderWidth: style.borderWidth,
+                    boxShadow: style.boxShadow,
+                    before: {
+                        content: beforeStyle.content,
+                        backgroundColor: beforeStyle.backgroundColor,
+                        backgroundImage: beforeStyle.backgroundImage,
+                        borderWidth: beforeStyle.borderWidth,
+                        boxShadow: beforeStyle.boxShadow,
+                    },
+                    after: {
+                        content: afterStyle.content,
+                        backgroundColor: afterStyle.backgroundColor,
+                        backgroundImage: afterStyle.backgroundImage,
+                        borderWidth: afterStyle.borderWidth,
+                        boxShadow: afterStyle.boxShadow,
+                    },
+                };
+            });
+            const inactiveFileEntryStyles = fileEntryStyles.filter(
+                (style) => !style.interactive
+            );
+            const fileEntriesAreContainerless = inactiveFileEntryStyles.every(
+                (style) =>
+                    (style.backgroundColor === "rgba(0, 0, 0, 0)" ||
+                        style.backgroundColor === "transparent") &&
+                    style.backgroundImage === "none" &&
+                    style.borderWidth === "0px" &&
+                    style.boxShadow === "none"
+            );
             const recentFileCount =
                 contentEl.querySelectorAll(".roam-nav-recent-file").length;
             const bookmarkCount =
@@ -883,6 +926,41 @@ export default class DailyNoteViewPlugin extends Plugin {
             const onlyConfiguredViewsRendered =
                 entryLabels.join("|") === configuredEntryLabels.join("|") &&
                 configuredEntryLabels.every((label) => ariaLabels.includes(label));
+            const sectionTitle = contentEl.querySelector<HTMLElement>(
+                ".roam-nav-section-title"
+            );
+            const sectionTitleStyle = sectionTitle
+                ? window.getComputedStyle(sectionTitle)
+                : null;
+            const sectionTitleRect = sectionTitle?.getBoundingClientRect();
+            const firstViewStyle = viewEntryStyles[0];
+            const navigationPixelContract = {
+                sectionTitleHeight: sectionTitleRect?.height ?? null,
+                sectionTitleFontSize: sectionTitleStyle?.fontSize ?? null,
+                sectionTitleFontWeight: sectionTitleStyle?.fontWeight ?? null,
+                sectionTitlePaddingLeft: sectionTitleStyle?.paddingLeft ?? null,
+                viewEntryHeight: firstViewStyle?.height ?? null,
+                viewEntryPaddingLeft: firstViewStyle?.paddingLeft ?? null,
+                viewEntryGap: firstViewStyle?.columnGap ?? null,
+                iconWidth: firstViewStyle?.iconWidth ?? null,
+                iconLeftDelta: firstViewStyle?.iconLeftDelta ?? null,
+                labelLeftDelta: firstViewStyle?.labelLeftDelta ?? null,
+                labelFontSize: firstViewStyle?.labelFontSize ?? null,
+                labelFontWeight: firstViewStyle?.labelFontWeight ?? null,
+            };
+            const navigationPixelContractPassed =
+                navigationPixelContract.sectionTitleHeight === 22 &&
+                navigationPixelContract.sectionTitleFontSize === "10px" &&
+                navigationPixelContract.sectionTitleFontWeight === "700" &&
+                navigationPixelContract.sectionTitlePaddingLeft === "8px" &&
+                navigationPixelContract.viewEntryHeight === 44 &&
+                navigationPixelContract.viewEntryPaddingLeft === "8px" &&
+                navigationPixelContract.viewEntryGap === "10px" &&
+                navigationPixelContract.iconWidth === 16 &&
+                navigationPixelContract.iconLeftDelta === 8 &&
+                navigationPixelContract.labelLeftDelta === 34 &&
+                navigationPixelContract.labelFontSize === "13px" &&
+                navigationPixelContract.labelFontWeight === "600";
             const passed =
                 leavesAfterFirstOpen.length >= 1 &&
                 !duplicateCreated &&
@@ -890,7 +968,10 @@ export default class DailyNoteViewPlugin extends Plugin {
                 contentEl.querySelector(".roam-nav-title")?.textContent?.trim() ===
                     "Roam workspace" &&
                 onlyConfiguredViewsRendered &&
-                sectionTitles.includes("Views") &&
+                viewEntriesAreContainerless &&
+                fileEntriesAreContainerless &&
+                navigationPixelContractPassed &&
+                sectionTitles.includes("Navigation") &&
                 sectionTitles.includes("Recent files") &&
                 sectionTitles.includes("Bookmarks") &&
                 (recentFileCount > 0 || hasEmptyRecent);
@@ -907,6 +988,12 @@ export default class DailyNoteViewPlugin extends Plugin {
                 entryLabels,
                 configuredEntryLabels,
                 onlyConfiguredViewsRendered,
+                viewEntriesAreContainerless,
+                viewEntryStyles,
+                navigationPixelContract,
+                navigationPixelContractPassed,
+                fileEntriesAreContainerless,
+                fileEntryStyles,
                 sectionTitles,
                 ariaLabels,
                 recentFileCount,
@@ -931,7 +1018,10 @@ export default class DailyNoteViewPlugin extends Plugin {
             "- ## List heading",
             "- top block",
             "\t- child block",
-            "\t\t- hidden grand child",
+            "\t\t- grand child block",
+            "\t\t\t- great grand child block",
+            "\t\t\t\t- deepest block",
+            "\t\t\t- ## Deep list heading",
             "```",
             "- ## hidden fenced",
             "```",
@@ -957,19 +1047,79 @@ export default class DailyNoteViewPlugin extends Plugin {
                 return { status: "failed", reason: "list-heading-view-not-open" };
             }
 
-            const snapshots: Record<ListHeadingMode, Record<string, unknown>> = {
-                "headings-only": {},
-                "top-indent": {},
-                "top-two-indent": {},
-            };
-            for (const mode of [
-                "headings-only",
-                "top-indent",
-                "top-two-indent",
-            ] as ListHeadingMode[]) {
-                listView.setModeForAudit(mode);
-                snapshots[mode] = await listView.getAuditSnapshotForFile(file);
+            const snapshots: Record<string, Record<string, unknown>> = {};
+            for (const depth of LIST_HEADING_DEPTHS) {
+                listView.setDepthForAudit(depth);
+                snapshots[`depth-${depth}`] =
+                    await listView.getAuditSnapshotForFile(file);
             }
+
+            await listView.setState({ mode: "top-two-indent" });
+            const migratedLegacyDepth = listView.getState().depth;
+            await listView.setState({ depth: 2 });
+            let depthInput = listView.getDepthControlForAudit();
+            depthInput?.focus();
+            depthInput?.dispatchEvent(
+                new KeyboardEvent("keydown", {
+                    key: "ArrowRight",
+                    bubbles: true,
+                    cancelable: true,
+                })
+            );
+            const arrowRightDepth = listView.getState().depth;
+            await listView.getAuditSnapshotForFile(file);
+            const arrowRightFocusRestored =
+                document.activeElement === listView.getDepthControlForAudit();
+            depthInput = listView.getDepthControlForAudit();
+            depthInput?.dispatchEvent(
+                new KeyboardEvent("keydown", {
+                    key: "Home",
+                    bubbles: true,
+                    cancelable: true,
+                })
+            );
+            const homeDepth = listView.getState().depth;
+            await listView.getAuditSnapshotForFile(file);
+            const homeFocusRestored =
+                document.activeElement === listView.getDepthControlForAudit();
+            depthInput = listView.getDepthControlForAudit();
+            depthInput?.dispatchEvent(
+                new KeyboardEvent("keydown", {
+                    key: "End",
+                    bubbles: true,
+                    cancelable: true,
+                })
+            );
+            const endDepth = listView.getState().depth;
+            await listView.getAuditSnapshotForFile(file);
+            const endFocusRestored =
+                document.activeElement === listView.getDepthControlForAudit();
+            depthInput = listView.getDepthControlForAudit();
+            if (depthInput) {
+                depthInput.value = "4";
+                depthInput.dispatchEvent(
+                    new InputEvent("input", {
+                        bubbles: true,
+                        cancelable: true,
+                    })
+                );
+            }
+            const inputDepth = listView.getState().depth;
+            await listView.getAuditSnapshotForFile(file);
+            const inputFocusRestored =
+                document.activeElement === listView.getDepthControlForAudit();
+            const sliderInteraction = {
+                migratedLegacyDepth,
+                arrowRightDepth,
+                homeDepth,
+                endDepth,
+                inputDepth,
+                persistedDepth: listView.getState().depth,
+                arrowRightFocusRestored,
+                homeFocusRestored,
+                endFocusRestored,
+                inputFocusRestored,
+            };
 
             await this.pushFileToPageStream(file, "link", {
                 kind: "heading",
@@ -989,9 +1139,7 @@ export default class DailyNoteViewPlugin extends Plugin {
             });
             const pageStreamView = await this.openPageStreamView();
             const pageStreamState = pageStreamView?.getState();
-            const targets = isRecord(pageStreamState) && Array.isArray(pageStreamState.targets)
-                ? pageStreamState.targets
-                : [];
+            const targets = readPageStreamAuditTargets(pageStreamState);
             const topTarget = targets[0];
             const fixtureTargets = targets.filter(
                 (target) => isRecord(target) && target.path === fixturePath
@@ -1000,26 +1148,46 @@ export default class DailyNoteViewPlugin extends Plugin {
                 ? await this.auditPageStreamEditSave(pageStreamView, file)
                 : { status: "failed", reason: "page-stream-view-not-open" };
             const pageStreamFocusRestore = await this.auditPageStreamFocusRestore(file);
-            const pageStreamDomShiftClick = await this.auditPageStreamDomShiftClick(file);
             const pageStreamReadingShiftClick =
                 await this.auditPageStreamRenderedShiftClick(file, "preview");
             const pageStreamLivePreviewShiftClick =
                 await this.auditPageStreamRenderedShiftClick(file, "live-preview");
-            const pageStreamOpenFileShiftClick =
-                await this.auditPageStreamOpenFileShiftClick(file);
-            const pageStreamSidebarLikeShiftClick =
-                await this.auditPageStreamSidebarLikeOpenFileShiftClick(file);
 
-            const headingsOnlyTitles = getSnapshotTitles(snapshots["headings-only"]);
-            const topIndentTitles = getSnapshotTitles(snapshots["top-indent"]);
-            const topTwoTitles = getSnapshotTitles(snapshots["top-two-indent"]);
+            const depthTitles = LIST_HEADING_DEPTHS.map((depth) =>
+                getSnapshotTitles(snapshots[`depth-${depth}`])
+            );
+            const sliderDomContract = LIST_HEADING_DEPTHS.every((depth) => {
+                const snapshot = snapshots[`depth-${depth}`];
+                return (
+                    getNestedNumberOrFallback(snapshot, ["dom", "depthControlCount"], -1) === 1 &&
+                    getNestedNumberOrFallback(snapshot, ["dom", "depthInputCount"], -1) === 1 &&
+                    getNestedNumberOrFallback(snapshot, ["dom", "depthTickCount"], -1) === 6 &&
+                    snapshot.availableDepth === 5
+                );
+            });
             const passed =
-                headingsOnlyTitles.join("|") === "Root|List heading|Second" &&
-                topIndentTitles.includes("top block") &&
-                topIndentTitles.includes("done task") &&
-                !topIndentTitles.includes("child block") &&
-                topTwoTitles.includes("child block") &&
-                !topTwoTitles.includes("hidden grand child") &&
+                depthTitles[0].join("|") ===
+                    "Root|List heading|Deep list heading|Second" &&
+                depthTitles[1].includes("top block") &&
+                depthTitles[1].includes("done task") &&
+                !depthTitles[1].includes("child block") &&
+                depthTitles[2].includes("child block") &&
+                !depthTitles[2].includes("grand child block") &&
+                depthTitles[3].includes("grand child block") &&
+                !depthTitles[3].includes("great grand child block") &&
+                depthTitles[4].includes("great grand child block") &&
+                !depthTitles[4].includes("deepest block") &&
+                depthTitles[5].includes("deepest block") &&
+                sliderDomContract &&
+                migratedLegacyDepth === 2 &&
+                arrowRightDepth === 3 &&
+                homeDepth === 0 &&
+                endDepth === 5 &&
+                inputDepth === 4 &&
+                arrowRightFocusRestored &&
+                homeFocusRestored &&
+                endFocusRestored &&
+                inputFocusRestored &&
                 isRecord(topTarget) &&
                 topTarget.path === fixturePath &&
                 topTarget.kind === "line" &&
@@ -1030,22 +1198,18 @@ export default class DailyNoteViewPlugin extends Plugin {
                 pageStreamEditSave.status === "passed" &&
                 isRecord(pageStreamFocusRestore) &&
                 pageStreamFocusRestore.status === "passed" &&
-                isRecord(pageStreamDomShiftClick) &&
-                pageStreamDomShiftClick.status === "passed" &&
                 isRecord(pageStreamReadingShiftClick) &&
                 pageStreamReadingShiftClick.status === "passed" &&
                 isRecord(pageStreamLivePreviewShiftClick) &&
-                pageStreamLivePreviewShiftClick.status === "passed" &&
-                isRecord(pageStreamOpenFileShiftClick) &&
-                pageStreamOpenFileShiftClick.status === "passed" &&
-                isRecord(pageStreamSidebarLikeShiftClick) &&
-                pageStreamSidebarLikeShiftClick.status === "passed";
+                pageStreamLivePreviewShiftClick.status === "passed";
 
             return {
                 status: passed ? "passed" : "failed",
                 reason: passed ? undefined : "list-heading-audit-mismatch",
                 fixturePath,
                 snapshots,
+                sliderInteraction,
+                sliderDomContract,
                 pageStreamTopTarget: topTarget ?? null,
                 pageStreamFixtureTargetCount: fixtureTargets.length,
                 exercisedPageStreamTargets: [
@@ -1055,284 +1219,14 @@ export default class DailyNoteViewPlugin extends Plugin {
                 ],
                 pageStreamEditSave,
                 pageStreamFocusRestore,
-                pageStreamDomShiftClick,
                 pageStreamReadingShiftClick,
                 pageStreamLivePreviewShiftClick,
-                pageStreamOpenFileShiftClick,
-                pageStreamSidebarLikeShiftClick,
             };
         } catch (error) {
             return {
                 status: "failed",
                 reason: error instanceof Error ? error.message : String(error),
             };
-        }
-    }
-
-    async auditPageStreamSidebarLikeOpenFileShiftClick(
-        targetFile: TFile
-    ): Promise<Record<string, unknown>> {
-        const sourcePath = "tmp/roam-page-stream-sidebar-shift-click-source.md";
-        const sourceContent = ["# Sidebar shift source", "- keep active"].join("\n");
-        let sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
-        if (sourceFile instanceof TFile) {
-            await this.app.vault.modify(sourceFile, sourceContent);
-        } else {
-            sourceFile = await this.app.vault.create(sourcePath, sourceContent);
-        }
-        if (!(sourceFile instanceof TFile)) {
-            return { status: "failed", reason: "sidebar-source-not-created" };
-        }
-
-        const sourceLeaf = this.app.workspace.getLeaf(false);
-        await sourceLeaf.openFile(sourceFile, { active: true });
-        this.app.workspace.setActiveLeaf(sourceLeaf, { focus: true });
-        if (sourceLeaf.view instanceof MarkdownView) {
-            sourceLeaf.view.editor.focus();
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-
-        const sidebarContainer = this.app.workspace.containerEl.createDiv({
-            cls: "workspace-leaf-content nav-files-container roam-page-stream-audit-sidebar",
-        });
-        sidebarContainer.style.setProperty("position", "fixed");
-        sidebarContainer.style.setProperty("left", "-10000px");
-        sidebarContainer.style.setProperty("top", "0");
-        const sidebarRow = sidebarContainer.createDiv({
-            cls: "nav-file-title search-result-file-title bookmark-item",
-            attr: {
-                role: "button",
-                tabindex: "0",
-                "aria-label": `Open ${targetFile.basename}`,
-                "data-path": targetFile.path,
-            },
-        });
-        sidebarRow.createDiv({
-            cls: "nav-file-title-content",
-            text: targetFile.basename,
-        });
-
-        try {
-            const before = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
-            sidebarRow.dispatchEvent(
-                new MouseEvent("click", {
-                    bubbles: true,
-                    cancelable: true,
-                    shiftKey: true,
-                    button: 0,
-                    buttons: 1,
-                    view: window,
-                })
-            );
-            await sourceLeaf.openFile(targetFile, { active: true });
-            await new Promise((resolve) => window.setTimeout(resolve, 900));
-
-            const pageStreamView = await this.openPageStreamView({
-                active: false,
-                reveal: false,
-            });
-            const state = pageStreamView?.getState();
-            const targets = isRecord(state) && Array.isArray(state.targets)
-                ? state.targets
-                : [];
-            const topTarget = targets[0];
-            const after = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
-            const sourceLeafAfter = getMarkdownLeafAuditState(sourceLeaf);
-            const passed =
-                isRecord(topTarget) &&
-                topTarget.path === targetFile.path &&
-                topTarget.kind === "file" &&
-                topTarget.source === "navigation" &&
-                before.path === sourcePath &&
-                after.path === sourcePath &&
-                sourceLeafAfter.path === sourcePath;
-
-            return {
-                status: passed ? "passed" : "failed",
-                reason: passed
-                    ? undefined
-                    : "page-stream-sidebar-like-shift-click-mismatch",
-                sourcePath,
-                targetPath: targetFile.path,
-                before,
-                after,
-                sourceLeafAfter,
-                rowClass: sidebarRow.className,
-                rowRole: sidebarRow.getAttribute("role"),
-                rowDataPath: sidebarRow.getAttribute("data-path"),
-                pageStreamTopTarget: topTarget ?? null,
-            };
-        } finally {
-            sidebarContainer.remove();
-        }
-    }
-
-    async auditPageStreamDomShiftClick(targetFile: TFile): Promise<Record<string, unknown>> {
-        const sourcePath = "tmp/roam-page-stream-shift-click-source.md";
-        const sourceContent = [
-            "# Shift click source",
-            `[[${targetFile.path}#Second|Open target]]`,
-        ].join("\n");
-        let sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
-        if (sourceFile instanceof TFile) {
-            await this.app.vault.modify(sourceFile, sourceContent);
-        } else {
-            sourceFile = await this.app.vault.create(sourcePath, sourceContent);
-        }
-        if (!(sourceFile instanceof TFile)) {
-            return { status: "failed", reason: "shift-click-source-not-created" };
-        }
-
-        const sourceLeaf = this.app.workspace.getLeaf(false);
-        await sourceLeaf.openFile(sourceFile, { active: true });
-        this.app.workspace.setActiveLeaf(sourceLeaf, { focus: true });
-        if (sourceLeaf.view instanceof MarkdownView) {
-            sourceLeaf.view.editor.focus();
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-
-        if (!(sourceLeaf.view instanceof MarkdownView)) {
-            return { status: "failed", reason: "shift-click-source-not-markdown" };
-        }
-        const renderContainer = this.app.workspace.containerEl.createDiv({
-            cls: "roam-page-stream-audit-render",
-        });
-        renderContainer.style.setProperty("position", "fixed");
-        renderContainer.style.setProperty("left", "-10000px");
-        renderContainer.style.setProperty("top", "0");
-        const linkEl = renderContainer.createEl("a", {
-            cls: "internal-link",
-            text: "Open target",
-            attr: {
-                href: `${targetFile.path}#Second`,
-                "data-href": `${targetFile.path}#Second`,
-            },
-        });
-        try {
-            const before = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
-            linkEl.dispatchEvent(
-                new MouseEvent("click", {
-                    bubbles: true,
-                    cancelable: true,
-                    shiftKey: true,
-                    button: 0,
-                    buttons: 1,
-                    view: window,
-                })
-            );
-            await new Promise((resolve) => window.setTimeout(resolve, 800));
-            const pageStreamView = await this.openPageStreamView({
-                active: false,
-                reveal: false,
-            });
-            const state = pageStreamView?.getState();
-            const targets = isRecord(state) && Array.isArray(state.targets)
-                ? state.targets
-                : [];
-            const topTarget = targets[0];
-            const after = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
-            const passed =
-                isRecord(topTarget) &&
-                topTarget.path === targetFile.path &&
-                topTarget.kind === "heading" &&
-                topTarget.subpath === "#Second" &&
-                before.path === sourcePath &&
-                after.path === sourcePath;
-
-            return {
-                status: passed ? "passed" : "failed",
-                reason: passed ? undefined : "page-stream-dom-shift-click-mismatch",
-                sourcePath,
-                targetPath: targetFile.path,
-                before,
-                after,
-                linkText: linkEl.textContent,
-                linkDataHref: linkEl.getAttribute("data-href"),
-                linkHref: linkEl.getAttribute("href"),
-                pageStreamTopTarget: topTarget ?? null,
-            };
-        } finally {
-            renderContainer.remove();
-        }
-    }
-
-    async auditPageStreamOpenFileShiftClick(targetFile: TFile): Promise<Record<string, unknown>> {
-        const sourcePath = "tmp/roam-page-stream-open-file-shift-click-source.md";
-        const sourceContent = ["# Open file shift source", "- keep active"].join("\n");
-        let sourceFile = this.app.vault.getAbstractFileByPath(sourcePath);
-        if (sourceFile instanceof TFile) {
-            await this.app.vault.modify(sourceFile, sourceContent);
-        } else {
-            sourceFile = await this.app.vault.create(sourcePath, sourceContent);
-        }
-        if (!(sourceFile instanceof TFile)) {
-            return { status: "failed", reason: "open-file-source-not-created" };
-        }
-
-        const sourceLeaf = this.app.workspace.getLeaf(false);
-        await sourceLeaf.openFile(sourceFile, { active: true });
-        this.app.workspace.setActiveLeaf(sourceLeaf, { focus: true });
-        if (sourceLeaf.view instanceof MarkdownView) {
-            sourceLeaf.view.editor.focus();
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-
-        const trigger = this.app.workspace.containerEl.createEl("button", {
-            text: "Open file route trigger",
-            attr: { type: "button" },
-        });
-        trigger.addClass("roam-page-stream-audit-open-file-trigger");
-        trigger.style.setProperty("position", "fixed");
-        trigger.style.setProperty("left", "-10000px");
-        trigger.style.setProperty("top", "0");
-
-        try {
-            const before = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
-            trigger.dispatchEvent(
-                new MouseEvent("click", {
-                    bubbles: true,
-                    cancelable: true,
-                    shiftKey: true,
-                    button: 0,
-                    buttons: 1,
-                    view: window,
-                })
-            );
-            await sourceLeaf.openFile(targetFile, { active: true });
-            await new Promise((resolve) => window.setTimeout(resolve, 900));
-
-            const pageStreamView = await this.openPageStreamView({
-                active: false,
-                reveal: false,
-            });
-            const state = pageStreamView?.getState();
-            const targets = isRecord(state) && Array.isArray(state.targets)
-                ? state.targets
-                : [];
-            const topTarget = targets[0];
-            const after = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
-            const sourceLeafAfter = getMarkdownLeafAuditState(sourceLeaf);
-            const passed =
-                isRecord(topTarget) &&
-                topTarget.path === targetFile.path &&
-                topTarget.kind === "file" &&
-                topTarget.source === "navigation" &&
-                before.path === sourcePath &&
-                after.path === sourcePath &&
-                sourceLeafAfter.path === sourcePath;
-
-            return {
-                status: passed ? "passed" : "failed",
-                reason: passed ? undefined : "page-stream-open-file-shift-click-mismatch",
-                sourcePath,
-                targetPath: targetFile.path,
-                before,
-                after,
-                sourceLeafAfter,
-                pageStreamTopTarget: topTarget ?? null,
-            };
-        } finally {
-            trigger.remove();
         }
     }
 
@@ -1387,7 +1281,7 @@ export default class DailyNoteViewPlugin extends Plugin {
             };
         }
 
-        const before = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
+        const before = getActiveMarkdownAuditState(this.app.workspace);
         linkEl.dispatchEvent(
             new MouseEvent("click", {
                 bubbles: true,
@@ -1405,11 +1299,9 @@ export default class DailyNoteViewPlugin extends Plugin {
             reveal: false,
         });
         const state = pageStreamView?.getState();
-        const targets = isRecord(state) && Array.isArray(state.targets)
-            ? state.targets
-            : [];
+        const targets = readPageStreamAuditTargets(state);
         const topTarget = targets[0];
-        const after = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
+        const after = getActiveMarkdownAuditState(this.app.workspace);
         const passed =
             isRecord(topTarget) &&
             topTarget.path === targetFile.path &&
@@ -1478,7 +1370,7 @@ export default class DailyNoteViewPlugin extends Plugin {
             sourceLeaf.view.editor.focus();
         }
         this.app.workspace.setActiveLeaf(sourceLeaf, { focus: true });
-        const before = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
+        const before = getActiveMarkdownAuditState(this.app.workspace);
 
         await this.pushFileToPageStream(
             targetFile,
@@ -1487,7 +1379,7 @@ export default class DailyNoteViewPlugin extends Plugin {
             { active: false, reveal: true }
         );
         await new Promise((resolve) => window.setTimeout(resolve, 500));
-        const after = getMarkdownLeafAuditState(this.app.workspace.activeLeaf);
+        const after = getActiveMarkdownAuditState(this.app.workspace);
         const passed =
             before.path === sourcePath &&
             after.path === sourcePath &&
@@ -1512,19 +1404,234 @@ export default class DailyNoteViewPlugin extends Plugin {
         const continuousMarkers = [0, 1, 2].map(
             (index) => `${marker}-continuous-${index + 1}`
         );
+        const initialEditorDeadline = Date.now() + 30000;
+        while (
+            !pageStreamView.isEditingEditorReadyForAudit(file.path) &&
+            Date.now() < initialEditorDeadline
+        ) {
+            await new Promise((resolve) => window.setTimeout(resolve, 50));
+        }
         const before = pageStreamView.getAuditSnapshot();
         const cardBeforeEdit = pageStreamView.getCardElementForAudit(file.path);
         const titleButton = cardBeforeEdit?.querySelector<HTMLButtonElement>(
             ".roam-page-card-title"
+        );
+        const collapseButton = cardBeforeEdit?.querySelector<HTMLButtonElement>(
+            '.roam-page-card-actions-start button[aria-label="Collapse page"]'
         );
         const cardActionLabels = Array.from(
             cardBeforeEdit?.querySelectorAll<HTMLButtonElement>(
                 ".roam-page-card-actions button"
             ) ?? []
         ).map((button) => button.getAttribute("aria-label"));
+        const headerButtonLabels = Array.from(
+            cardBeforeEdit?.querySelectorAll<HTMLButtonElement>(
+                ".roam-page-card-header button"
+            ) ?? []
+        ).map((button) => button.getAttribute("aria-label"));
+        const headerHeight =
+            cardBeforeEdit
+                ?.querySelector<HTMLElement>(".roam-page-card-header")
+                ?.getBoundingClientRect().height ?? null;
+        const headerEl = cardBeforeEdit?.querySelector<HTMLElement>(
+            ".roam-page-card-header"
+        );
+        const headerStyle = headerEl ? window.getComputedStyle(headerEl) : null;
+        const headerActionSizes = Array.from(
+            headerEl?.querySelectorAll<HTMLElement>(".roam-icon-button") ?? []
+        ).map((button) => {
+            const rect = button.getBoundingClientRect();
+            return { width: rect.width, height: rect.height };
+        });
+        const expectedCompactHeaderHeight = window.innerWidth <= 600 ? 44 : 28;
+        const expectedCompactHeaderWidth = window.innerWidth <= 600 ? 44 : 36;
+        const titleNameEl = titleButton?.querySelector<HTMLElement>(
+            ".roam-page-card-name"
+        );
+        const titleNameStyle = titleNameEl
+            ? window.getComputedStyle(titleNameEl)
+            : null;
+        const bodyBeforeEdit = cardBeforeEdit?.querySelector<HTMLElement>(
+            ".roam-page-card-body"
+        );
+        const cardRectBeforeEdit = getRectAuditSnapshot(cardBeforeEdit);
+        const bodyRectBeforeEdit = getRectAuditSnapshot(bodyBeforeEdit);
+        const editorContentRectBeforeFocus = getRectAuditSnapshot(
+            cardBeforeEdit?.querySelector<HTMLElement>(
+                ".roam-page-card-editor-mount .cm-line"
+            )
+        );
+        const editorDomBeforeFocus = cardBeforeEdit?.querySelector(".cm-editor") ?? null;
+        const streamListBeforeEdit = cardBeforeEdit?.closest<HTMLElement>(
+            ".roam-page-stream-list"
+        );
+        const streamScrollTopBeforeEdit = streamListBeforeEdit?.scrollTop ?? null;
+        const cardStyleBeforeEdit = cardBeforeEdit
+            ? window.getComputedStyle(cardBeforeEdit)
+            : null;
+        const streamHeaderEl = pageStreamView.contentEl.querySelector<HTMLElement>(
+            ".roam-page-stream-header"
+        );
+        const streamTitleEl = streamHeaderEl?.querySelector<HTMLElement>(
+            ".roam-page-stream-title"
+        );
+        const streamStatusEl = streamHeaderEl?.querySelector<HTMLElement>(
+            ".roam-page-stream-status"
+        );
+        const streamListEl = pageStreamView.contentEl.querySelector<HTMLElement>(
+            ".roam-page-stream-list"
+        );
+        const editorMountEl = cardBeforeEdit?.querySelector<HTMLElement>(
+            ".roam-page-card-editor-mount"
+        );
+        const streamTitleStyle = streamTitleEl
+            ? window.getComputedStyle(streamTitleEl)
+            : null;
+        const streamStatusStyle = streamStatusEl
+            ? window.getComputedStyle(streamStatusEl)
+            : null;
+        const streamListStyle = streamListEl
+            ? window.getComputedStyle(streamListEl)
+            : null;
+        const bodyStyleBeforeEdit = bodyBeforeEdit
+            ? window.getComputedStyle(bodyBeforeEdit)
+            : null;
+        const editorMountStyle = editorMountEl
+            ? window.getComputedStyle(editorMountEl)
+            : null;
+        const pageStreamRootStyle = window.getComputedStyle(
+            pageStreamView.contentEl
+        );
+        const themeProbe = pageStreamView.contentEl.createDiv({
+            cls: "roam-page-stream-theme-probe",
+        });
+        const secondaryThemeProbe = pageStreamView.contentEl.createDiv({
+            cls: "roam-page-stream-theme-probe-secondary",
+        });
+        const themeProbeStyle = window.getComputedStyle(themeProbe);
+        const secondaryThemeProbeStyle = window.getComputedStyle(
+            secondaryThemeProbe
+        );
+        const themeContractExpected = {
+            paneBackgroundColor: secondaryThemeProbeStyle.backgroundColor,
+            cardBackgroundColor: themeProbeStyle.backgroundColor,
+            panelHeaderBackground: themeProbeStyle.backgroundImage,
+            borderColor: themeProbeStyle.borderTopColor,
+            textColor: themeProbeStyle.color,
+            shadow: themeProbeStyle.boxShadow,
+            cardBorderRadius: themeProbeStyle.borderRadius,
+            paneHeaderFontSize: themeProbeStyle.fontSize,
+            panelHeaderFontSize: secondaryThemeProbeStyle.fontSize,
+        };
+        themeProbe.remove();
+        secondaryThemeProbe.remove();
+        const pageStreamPixelContract = {
+            paneBackgroundColor: pageStreamRootStyle.backgroundColor,
+            paneHeaderHeight: streamHeaderEl?.getBoundingClientRect().height ?? null,
+            paneTitleFontSize: streamTitleStyle?.fontSize ?? null,
+            paneTitleFontWeight: streamTitleStyle?.fontWeight ?? null,
+            paneStatusFontSize: streamStatusStyle?.fontSize ?? null,
+            paneStatusFontWeight: streamStatusStyle?.fontWeight ?? null,
+            listGap: streamListStyle?.rowGap ?? null,
+            listPadding: streamListStyle
+                ? [
+                    streamListStyle.paddingTop,
+                    streamListStyle.paddingRight,
+                    streamListStyle.paddingBottom,
+                    streamListStyle.paddingLeft,
+                ]
+                : null,
+            cardBorderRadius: cardStyleBeforeEdit?.borderRadius ?? null,
+            cardBackgroundColor: cardStyleBeforeEdit?.backgroundColor ?? null,
+            cardBorderColor: cardStyleBeforeEdit?.borderTopColor ?? null,
+            cardBoxShadow: cardStyleBeforeEdit?.boxShadow ?? null,
+            panelHeaderHeight: headerHeight,
+            panelHeaderBackground: headerStyle?.backgroundImage ?? null,
+            panelTitleFontSize: titleNameStyle?.fontSize ?? null,
+            panelTitleColor: titleNameStyle?.color ?? null,
+            panelActionSizes: headerActionSizes,
+            bodyBackgroundColor: bodyStyleBeforeEdit?.backgroundColor ?? null,
+            bodyPadding: bodyStyleBeforeEdit?.padding ?? null,
+            editorPadding: editorMountStyle
+                ? [
+                    editorMountStyle.paddingTop,
+                    editorMountStyle.paddingRight,
+                    editorMountStyle.paddingBottom,
+                    editorMountStyle.paddingLeft,
+                ]
+                : null,
+        };
+        const pageStreamPixelContractPassed =
+            pageStreamPixelContract.paneHeaderHeight === 40 &&
+            pageStreamPixelContract.paneTitleFontSize ===
+                themeContractExpected.paneHeaderFontSize &&
+            pageStreamPixelContract.paneTitleFontWeight === "500" &&
+            pageStreamPixelContract.paneStatusFontSize ===
+                themeContractExpected.paneHeaderFontSize &&
+            pageStreamPixelContract.paneStatusFontWeight === "400" &&
+            pageStreamPixelContract.listGap === "10px" &&
+            pageStreamPixelContract.listPadding?.join("|") ===
+                "12px|10px|26px|10px" &&
+            pageStreamPixelContract.cardBorderRadius ===
+                themeContractExpected.cardBorderRadius &&
+            pageStreamPixelContract.cardBoxShadow !== "none" &&
+            pageStreamPixelContract.panelHeaderHeight ===
+                expectedCompactHeaderHeight &&
+            pageStreamPixelContract.panelTitleFontSize ===
+                themeContractExpected.panelHeaderFontSize &&
+            pageStreamPixelContract.bodyPadding === "0px" &&
+            pageStreamPixelContract.editorPadding?.join("|") ===
+                "17px|14px|20px|14px";
+        const pageStreamThemeContractPassed =
+            pageStreamPixelContract.paneBackgroundColor ===
+                themeContractExpected.paneBackgroundColor &&
+            pageStreamPixelContract.cardBackgroundColor ===
+                themeContractExpected.cardBackgroundColor &&
+            pageStreamPixelContract.bodyBackgroundColor ===
+                themeContractExpected.cardBackgroundColor &&
+            pageStreamPixelContract.panelHeaderBackground ===
+                themeContractExpected.panelHeaderBackground &&
+            pageStreamPixelContract.cardBorderColor ===
+                themeContractExpected.borderColor &&
+            pageStreamPixelContract.panelTitleColor ===
+                themeContractExpected.textColor &&
+            pageStreamPixelContract.cardBoxShadow ===
+                themeContractExpected.shadow;
+        const interactiveAccent = window.getComputedStyle(document.body)
+            .getPropertyValue("--interactive-accent")
+            .trim();
+        const activeBorderIsNeutral =
+            cardStyleBeforeEdit !== null &&
+            cardStyleBeforeEdit.borderTopColor !== interactiveAccent;
+        const headerVisualContract =
+            headerStyle !== null &&
+            headerStyle.backgroundImage.startsWith("linear-gradient") &&
+            headerStyle.borderBottomLeftRadius === "0px" &&
+            headerStyle.borderBottomRightRadius === "0px" &&
+            headerActionSizes.length === 2 &&
+            headerActionSizes.every(
+                (size) =>
+                    Math.abs(size.width - expectedCompactHeaderWidth) <= 0.5 &&
+                    Math.abs(size.height - expectedCompactHeaderHeight) <= 0.5
+            ) &&
+            (headerEl?.scrollWidth ?? 1) <= (headerEl?.clientWidth ?? 0) &&
+            titleNameStyle?.overflow === "hidden" &&
+            titleNameStyle.textOverflow === "ellipsis" &&
+            titleNameStyle.whiteSpace === "nowrap";
+        const keyboardOrderMatchesLayout =
+            cardBeforeEdit?.tabIndex === -1 && bodyBeforeEdit?.tabIndex === 0;
         const immersiveHeader =
             titleButton?.getAttribute("aria-label")?.startsWith("Open ") === true &&
             cardActionLabels.length === 2 &&
+            headerButtonLabels.length === 3 &&
+            (headerButtonLabels[0] === "Collapse page" ||
+                headerButtonLabels[0] === "Expand page") &&
+            headerButtonLabels[1]?.startsWith("Open ") === true &&
+            headerButtonLabels[2] === "Close page" &&
+            headerHeight !== null &&
+            Math.abs(headerHeight - expectedCompactHeaderHeight) <= 0.5 &&
+            headerVisualContract &&
+            keyboardOrderMatchesLayout &&
             cardActionLabels.includes("Close page") &&
             !cardActionLabels.includes("Edit selected page") &&
             !cardActionLabels.includes("Open in main area");
@@ -1578,10 +1685,39 @@ export default class DailyNoteViewPlugin extends Plugin {
         const editorHasFocus = auditEditorView.editor.hasFocus();
         const editingCard = pageStreamView.getEditingCardForAudit(file.path);
         const editingCardFound = editingCard instanceof HTMLElement;
+        const cardRectDuringEdit = getRectAuditSnapshot(editingCard);
+        const editingBody = editingCard?.querySelector<HTMLElement>(
+            ".roam-page-card-body"
+        );
+        const bodyRectDuringEdit = getRectAuditSnapshot(editingBody);
+        const editorContentRectDuringEdit = getRectAuditSnapshot(
+            editingCard?.querySelector<HTMLElement>(
+                ".roam-page-card-editor-mount .cm-line"
+            )
+        );
+        const streamScrollTopDuringEdit =
+            editingCard?.closest<HTMLElement>(".roam-page-stream-list")?.scrollTop ?? null;
+        const shellGeometryStable =
+            rectOriginWithinTolerance(cardRectBeforeEdit, cardRectDuringEdit, 1) &&
+            rectOriginWithinTolerance(bodyRectBeforeEdit, bodyRectDuringEdit, 1) &&
+            numbersWithinTolerance(streamScrollTopBeforeEdit, streamScrollTopDuringEdit, 1);
+        const contentOriginStable = rectOriginWithinTolerance(
+            editorContentRectBeforeFocus,
+            editorContentRectDuringEdit,
+            1
+        );
+        const editorDomDuringFocus = editingCard?.querySelector(".cm-editor") ?? null;
+        const singleEditorDomDuringFocus =
+            editorDomBeforeFocus !== null &&
+            editorDomDuringFocus === editorDomBeforeFocus;
         const stableCardDuringEdit =
             cardBeforeEdit instanceof HTMLElement &&
             pageStreamView.getCardElementForAudit(file.path) === cardBeforeEdit;
         const hadEditingLeafBeforeEscape = pageStreamView.hasEditingLeafForAudit(file.path);
+        const blockSelectionAudit = await this.auditOutlinerBlockSelection(
+            auditEditorView,
+            editingCard
+        );
         const baselineCursorBeforeContinuousSave = auditEditorView.editor.getCursor();
         for (const continuousMarker of continuousMarkers) {
             const lastLine = auditEditorView.editor.lastLine();
@@ -1647,6 +1783,10 @@ export default class DailyNoteViewPlugin extends Plugin {
         }
         await new Promise((resolve) => window.setTimeout(resolve, 500));
         const previewState = pageStreamView.getAuditSnapshot();
+        const editorDomAfterEscape =
+            pageStreamView
+                .getCardElementForAudit(file.path)
+                ?.querySelector(".cm-editor") ?? null;
         const stableCardAfterEscape =
             cardBeforeEdit instanceof HTMLElement &&
             pageStreamView.getCardElementForAudit(file.path) === cardBeforeEdit;
@@ -1654,32 +1794,103 @@ export default class DailyNoteViewPlugin extends Plugin {
         if (getNestedNumberOrFallback(previewState, ["dom", "editingCardCount"], -1) !== 0) {
             pageStreamView.exitEditModeForAudit();
         }
+        const editorDomBeforeCollapse =
+            getPageStreamEditorDom(pageStreamView, file.path);
+        collapseButton?.click();
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+        const cardWhileCollapsed = pageStreamView.getCardElementForAudit(file.path);
+        const bodyWhileCollapsed = cardWhileCollapsed?.querySelector<HTMLElement>(
+            ".roam-page-card-body"
+        );
+        const bodyChildCountWhileCollapsed =
+            bodyWhileCollapsed?.childElementCount ?? -1;
+        const bodyHiddenWhileCollapsed =
+            bodyWhileCollapsed?.hasClass("is-collapsed") === true;
+        const editorDomWhileCollapsed =
+            getPageStreamEditorDom(pageStreamView, file.path);
+        const collapsedSnapshot = pageStreamView.getAuditSnapshot();
+        collapseButton?.click();
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        const cardAfterExpand = pageStreamView.getCardElementForAudit(file.path);
+        const bodyAfterExpand = cardAfterExpand?.querySelector<HTMLElement>(
+            ".roam-page-card-body"
+        );
+        const editorDomAfterExpand =
+            getPageStreamEditorDom(pageStreamView, file.path);
+        const expandedSnapshot = pageStreamView.getAuditSnapshot();
+        const collapseCacheState = {
+            bodyChildCountWhileCollapsed,
+            bodyHiddenWhileCollapsed,
+            cardRetained:
+                cardBeforeEdit instanceof HTMLElement &&
+                cardWhileCollapsed === cardBeforeEdit &&
+                cardAfterExpand === cardBeforeEdit,
+            editorDomRetainedWhileCollapsed:
+                editorDomBeforeCollapse !== null &&
+                editorDomWhileCollapsed === editorDomBeforeCollapse,
+            editorDomReusedAfterExpand:
+                editorDomBeforeCollapse !== null &&
+                editorDomAfterExpand === editorDomBeforeCollapse,
+            poolRetainedPath:
+                getNestedStringArray(collapsedSnapshot, ["editorPool", "paths"])
+                    .includes(file.path),
+            expandedWithoutPlaceholder:
+                bodyAfterExpand?.querySelector(
+                    ".roam-page-card-editor-placeholder"
+                ) === null,
+            bodyVisibleAfterExpand:
+                bodyAfterExpand?.hasClass("is-collapsed") === false,
+        };
         const passed =
             getNestedNumberOrFallback(before, ["dom", "editingCardCount"], -1) === 0 &&
             getNestedNumberOrFallback(editState, ["dom", "editingCardCount"], -1) === 1 &&
             editState.editingPath === file.path &&
             immersiveHeader &&
+            pageStreamPixelContractPassed &&
+            pageStreamThemeContractPassed &&
+            activeBorderIsNeutral &&
             editingCardFound &&
+            shellGeometryStable &&
+            contentOriginStable &&
+            singleEditorDomDuringFocus &&
             stableCardDuringEdit &&
             hadEditingLeafBeforeEscape &&
+            blockSelectionAudit.status === "passed" &&
             editorContainsMarker &&
             continuousSaveState.sourceContainsAllMarkers === true &&
             continuousSaveState.hasEditingLeafAfterContinuousSave === true &&
             continuousSaveState.editingCardCountAfterContinuousSave === 1 &&
-            continuousSaveState.markdownSourceCountAfterContinuousSave === 1 &&
+            continuousSaveState.markdownSourceCountAfterContinuousSave >= 1 &&
+            continuousSaveState.markdownSourceCountAfterContinuousSave <= 5 &&
             getNestedNumberOrFallback(
                 editSnapshotAfterContinuousSave,
                 ["dom", "editorHostCount"],
                 -1
-            ) === 1 &&
+            ) >= 1 &&
+            getNestedNumberOrFallback(
+                editSnapshotAfterContinuousSave,
+                ["dom", "editorHostCount"],
+                -1
+            ) <= 5 &&
             cursorAfterContinuousSave.line === baselineCursorBeforeContinuousSave.line &&
             cursorAfterContinuousSave.ch === baselineCursorBeforeContinuousSave.ch &&
             escapeDispatched &&
             stableCardAfterEscape &&
-            !hasEditingLeafAfterEscape &&
+            hasEditingLeafAfterEscape &&
+            editorDomAfterEscape === editorDomBeforeFocus &&
             getNestedNumberOrFallback(previewState, ["dom", "editingCardCount"], -1) === 0 &&
-            getNestedNumberOrFallback(previewState, ["dom", "editorHostCount"], -1) === 0 &&
-            getNestedNumberOrFallback(previewState, ["dom", "previewBodyCount"], 0) >= 1;
+            getNestedNumberOrFallback(previewState, ["dom", "editorHostCount"], -1) >= 1 &&
+            getNestedNumberOrFallback(previewState, ["dom", "editorHostCount"], -1) <= 5 &&
+            getNestedNumberOrFallback(previewState, ["dom", "previewBodyCount"], -1) === 0 &&
+            getNestedNumberOrFallback(previewState, ["editorPool", "size"], -1) <= 5 &&
+            collapseCacheState.bodyChildCountWhileCollapsed > 0 &&
+            collapseCacheState.bodyHiddenWhileCollapsed &&
+            collapseCacheState.cardRetained &&
+            collapseCacheState.editorDomRetainedWhileCollapsed &&
+            collapseCacheState.editorDomReusedAfterExpand &&
+            collapseCacheState.poolRetainedPath &&
+            collapseCacheState.expandedWithoutPlaceholder &&
+            collapseCacheState.bodyVisibleAfterExpand;
 
         return {
             status: passed ? "passed" : "failed",
@@ -1691,22 +1902,201 @@ export default class DailyNoteViewPlugin extends Plugin {
             before,
             editState,
             previewState,
+            collapsedSnapshot,
+            expandedSnapshot,
+            collapseCacheState,
             editorHasFocus,
             editingCardFound,
             enteredEditByCardClick: editState.editingPath === file.path,
             immersiveHeader,
             titleAriaLabel: titleButton?.getAttribute("aria-label") ?? null,
             cardActionLabels,
+            headerButtonLabels,
+            headerHeight,
+            headerVisualContract,
+            headerActionSizes,
+            headerBackgroundImage: headerStyle?.backgroundImage ?? null,
+            pageStreamPixelContract,
+            pageStreamPixelContractPassed,
+            pageStreamThemeContractPassed,
+            themeContractExpected,
+            keyboardOrderMatchesLayout,
+            activeBorderIsNeutral,
+            activeBorderColor: cardStyleBeforeEdit?.borderTopColor ?? null,
+            interactiveAccent,
+            geometry: {
+                cardRectBeforeEdit,
+                cardRectDuringEdit,
+                bodyRectBeforeEdit,
+                bodyRectDuringEdit,
+                editorContentRectBeforeFocus,
+                editorContentRectDuringEdit,
+                streamScrollTopBeforeEdit,
+                streamScrollTopDuringEdit,
+                shellGeometryStable,
+                contentOriginStable,
+            },
             stableCardDuringEdit,
             stableCardAfterEscape,
+            singleEditorDomDuringFocus,
+            singleEditorDomAfterEscape: editorDomAfterEscape === editorDomBeforeFocus,
             escapeDispatched,
             escapeEventCanceled,
             hadEditingLeafBeforeEscape,
             hasEditingLeafAfterEscape,
+            blockSelectionAudit,
             editorContainsMarker,
             sourceContainsMarker: source.includes(
                 continuousMarkers[continuousMarkers.length - 1]
             ),
+        };
+    }
+
+    private async auditOutlinerBlockSelection(
+        markdownView: MarkdownView,
+        card: HTMLElement | null
+    ): Promise<Record<string, unknown>> {
+        const codeMirror = (markdownView.editor as Editor & {
+            cm?: CodeMirrorEditorView;
+        }).cm;
+        if (!(codeMirror instanceof CodeMirrorEditorView)) {
+            return { status: "failed", reason: "codemirror-view-not-found" };
+        }
+        const enableDeadline = Date.now() + 1000;
+        while (
+            !codeMirror.dom.hasClass("roam-outliner-enabled") &&
+            Date.now() < enableDeadline
+        ) {
+            await new Promise((resolve) => window.setTimeout(resolve, 16));
+        }
+        if (!codeMirror.dom.hasClass("roam-outliner-enabled")) {
+            return { status: "failed", reason: "outliner-not-enabled" };
+        }
+
+        const sourceBefore = markdownView.editor.getValue();
+        const lines = sourceBefore.split("\n");
+        const childLine = lines.findIndex((line) => line.includes("- child block"));
+        if (childLine < 0) {
+            return { status: "failed", reason: "child-fixture-not-found" };
+        }
+        const selection = createBlockSelection(childLine);
+        const expectedMarkdown = serializeBlockSelection(lines, selection);
+        const expectedRange = resolveBlockSelection(lines, selection);
+        if (!expectedMarkdown || !expectedRange) {
+            return { status: "failed", reason: "child-selection-not-resolved" };
+        }
+
+        const childDocumentLine = codeMirror.state.doc.line(childLine + 1);
+        const childLineDom = codeMirror.domAtPos(childDocumentLine.from).node;
+        const childLineElement =
+            childLineDom.instanceOf(Element)
+                ? childLineDom.closest(".cm-line")
+                : childLineDom.parentElement?.closest(".cm-line") ?? null;
+        const blockMarker = childLineElement?.querySelector(
+            ".list-bullet, .cm-formatting-list"
+        );
+        if (!blockMarker?.instanceOf(HTMLElement)) {
+            return { status: "failed", reason: "block-marker-not-found" };
+        }
+        const pointerDownEvent = new MouseEvent("mousedown", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+        });
+        const pointerDownDispatchResult = blockMarker.dispatchEvent(
+            pointerDownEvent
+        );
+        const pointerClickEvent = new MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+        });
+        const pointerClickDispatchResult = blockMarker.dispatchEvent(
+            pointerClickEvent
+        );
+        const pointerSelectedState = codeMirror.state.field(
+            outlinerBlockSelectionField,
+            false
+        );
+
+        codeMirror.dispatch({
+            effects: setOutlinerBlockSelection.of(selection),
+        });
+        const selectedLineCount = card?.querySelectorAll(
+            ".cm-line.roam-outliner-block-selected"
+        ).length ?? 0;
+        const selectedState = codeMirror.state.field(
+            outlinerBlockSelectionField,
+            false
+        );
+
+        const copyTransfer = new DataTransfer();
+        const copyEvent = new ClipboardEvent("copy", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: copyTransfer,
+        });
+        const copyDispatchResult = codeMirror.contentDOM.dispatchEvent(copyEvent);
+        const copiedMarkdown = copyTransfer.getData("text/plain");
+        const copyClearedSelection =
+            codeMirror.state.field(outlinerBlockSelectionField, false) === null;
+
+        codeMirror.dispatch({
+            effects: setOutlinerBlockSelection.of(selection),
+        });
+        const cutTransfer = new DataTransfer();
+        const cutEvent = new ClipboardEvent("cut", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: cutTransfer,
+        });
+        const cutDispatchResult = codeMirror.contentDOM.dispatchEvent(cutEvent);
+        const sourceAfterCut = markdownView.editor.getValue();
+        const cutRemovedCompleteSubtree = expectedMarkdown
+            .split("\n")
+            .every((line) => !sourceAfterCut.includes(line.trim()));
+        markdownView.editor.undo();
+        const sourceAfterUndo = markdownView.editor.getValue();
+        const passed =
+            pointerSelectedState?.anchorLine === childLine &&
+            pointerDownDispatchResult === false &&
+            pointerDownEvent.defaultPrevented &&
+            pointerClickDispatchResult === false &&
+            pointerClickEvent.defaultPrevented &&
+            selectedState?.anchorLine === childLine &&
+            selectedLineCount === expectedRange.toLine - expectedRange.fromLine + 1 &&
+            copyDispatchResult === false &&
+            copyEvent.defaultPrevented &&
+            copiedMarkdown === expectedMarkdown &&
+            copyClearedSelection &&
+            cutDispatchResult === false &&
+            cutEvent.defaultPrevented &&
+            cutTransfer.getData("text/plain") === expectedMarkdown &&
+            cutRemovedCompleteSubtree &&
+            sourceAfterUndo === sourceBefore;
+
+        return {
+            status: passed ? "passed" : "failed",
+            reason: passed ? undefined : "block-selection-transaction-mismatch",
+            childLine,
+            markerClassName: blockMarker.className,
+            pointerDownDispatchResult,
+            pointerDownDefaultPrevented: pointerDownEvent.defaultPrevented,
+            pointerClickDispatchResult,
+            pointerClickDefaultPrevented: pointerClickEvent.defaultPrevented,
+            pointerSelectedAnchorLine: pointerSelectedState?.anchorLine ?? null,
+            expectedRange,
+            selectedLineCount,
+            copiedMarkdown,
+            expectedMarkdown,
+            copyDispatchResult,
+            copyDefaultPrevented: copyEvent.defaultPrevented,
+            copyClearedSelection,
+            cutDispatchResult,
+            cutDefaultPrevented: cutEvent.defaultPrevented,
+            cutClipboardMarkdown: cutTransfer.getData("text/plain"),
+            cutRemovedCompleteSubtree,
+            undoRestoredSource: sourceAfterUndo === sourceBefore,
         };
     }
 
@@ -1730,10 +2120,53 @@ export default class DailyNoteViewPlugin extends Plugin {
         );
         const tablePaste = "| a | b |\n|---|---|\n| 1 | 2 |";
         const protectedTablePaste = normalizeOutlinerPaste(tablePaste);
+        const orderedListPaste = normalizeOutlinerPaste(
+            "1. first\n   2. second"
+        );
+        const nestedContextPaste = adaptPasteToListContext(
+            mixedIndentPaste.text,
+            "\t- ",
+            3
+        );
+        const childPastePlan = planListContextPaste(
+            "- child\n  - grandchild\n- sibling",
+            "- parent",
+            8
+        );
+        const paragraphPastePlan = planListContextPaste(
+            "alpha\nbeta",
+            "plain paragraph",
+            4
+        );
+        const selectionLines = [
+            "- parent",
+            "\t- child",
+            "\t\t- grandchild",
+            "- sibling",
+            "\t- sibling child",
+        ];
+        const childSelection = createBlockSelection(1);
+        const childSelectionRange = resolveBlockSelection(
+            selectionLines,
+            childSelection
+        );
+        const childSelectionMarkdown = serializeBlockSelection(
+            selectionLines,
+            childSelection
+        );
+        const expandedSelection = adjustBlockSelection(
+            selectionLines,
+            createBlockSelection(0),
+            "down"
+        );
+        const expandedSelectionRange = expandedSelection
+            ? resolveBlockSelection(selectionLines, expandedSelection)
+            : null;
         const passed =
             paragraphPaste.changed === true &&
-            paragraphPaste.text === "- alpha\n- beta\n" &&
-            singleLinePaste.changed === false &&
+            paragraphPaste.text === "- alpha\n- beta" &&
+            singleLinePaste.changed === true &&
+            singleLinePaste.text === "- alpha" &&
             singleLinePaste.reason === "single-line" &&
             normalizedListPaste.changed === false &&
             normalizedListPaste.reason === "unchanged" &&
@@ -1742,6 +2175,18 @@ export default class DailyNoteViewPlugin extends Plugin {
                 "- parent copied from the web wrapped continuation\n\t- child child continuation" &&
             driftedIndentPaste.text ===
                 "- root\n- root drift\n\t- child\n\t- child drift" &&
+            orderedListPaste.text === "- first\n\t- second" &&
+            nestedContextPaste ===
+                "\t- alpha\n\t\t- beta\n\t\t\t- gamma" &&
+            childPastePlan?.placement === "insert-children" &&
+            childPastePlan.insert ===
+                "\n\t- child\n\t\t- grandchild\n\t- sibling" &&
+            paragraphPastePlan === null &&
+            childSelectionRange?.fromLine === 1 &&
+            childSelectionRange.toLine === 2 &&
+            childSelectionMarkdown === "- child\n\t- grandchild" &&
+            expandedSelectionRange?.fromLine === 0 &&
+            expandedSelectionRange.toLine === 4 &&
             protectedTablePaste.changed === false &&
             protectedTablePaste.reason === "protected";
 
@@ -1759,8 +2204,18 @@ export default class DailyNoteViewPlugin extends Plugin {
             mixedIndentPaste,
             wrappedListPaste,
             driftedIndentPaste,
+            orderedListPaste,
+            nestedContextPaste,
+            childPastePlan,
+            paragraphPastePlan,
+            blockSelection: {
+                childSelectionRange,
+                childSelectionMarkdown,
+                expandedSelectionRange,
+            },
             protectedTablePaste,
-            scope: "Built-in CodeMirror clipboardInputFilter; compatible with Outliner but does not require it or replace its Enter/Tab/Shift+Tab keymaps.",
+            module: this.outlinerModule?.getAuditState() ?? null,
+            scope: "Built-in Outliner uses a Stream context state field; external Outliner pauses duplicate keys and decorations while list-context paste normalization remains active.",
         };
     }
 
@@ -1797,7 +2252,7 @@ export default class DailyNoteViewPlugin extends Plugin {
             }
 
             await this.app.workspace.getLeaf(false).openFile(file);
-            const activeView = this.app.workspace.activeLeaf?.view;
+            const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
             if (
                 !(activeView instanceof MarkdownView) ||
                 activeView.file?.path !== fixturePath
@@ -1863,16 +2318,29 @@ export default class DailyNoteViewPlugin extends Plugin {
             runAt: new Date().toISOString(),
             pluginId: this.manifest.id,
             pluginVersion: this.manifest.version,
-            obsidianVersion:
-                (this.app as any)?.getVersion?.() ??
-                (window as any)?.app?.version ??
-                "unknown",
-            vaultRoot: this.app.vault.getName(),
+            buildFingerprint: {
+                head: import.meta.env.VITE_JOURNAL_STREAM_BUILD_HEAD,
+                dirty:
+                    import.meta.env.VITE_JOURNAL_STREAM_BUILD_DIRTY === "true",
+                sourceStateHash:
+                    import.meta.env.VITE_JOURNAL_STREAM_SOURCE_STATE_HASH,
+                buildId: import.meta.env.VITE_JOURNAL_STREAM_BUILD_ID,
+                builtAt: import.meta.env.VITE_JOURNAL_STREAM_BUILD_TIME,
+                manifestId: import.meta.env.VITE_JOURNAL_STREAM_MANIFEST_ID,
+                manifestVersion:
+                    import.meta.env.VITE_JOURNAL_STREAM_MANIFEST_VERSION,
+            },
+            obsidianVersion: this.getRuntimeObsidianVersionForAudit(),
+            vaultRoot:
+                this.app.vault.adapter instanceof FileSystemAdapter
+                    ? this.app.vault.adapter.getBasePath()
+                    : this.app.vault.getName(),
             viewport: {
                 width: window.innerWidth,
                 height: window.innerHeight,
                 devicePixelRatio: window.devicePixelRatio,
             },
+            processId: this.getRendererProcessId(),
             settings: {
                 journalFolder: this.settings.journalFolder,
                 defaultOpenMode: this.settings.defaultOpenMode,
@@ -1888,25 +2356,41 @@ export default class DailyNoteViewPlugin extends Plugin {
         );
     }
 
-    async checkJournalStreamUiAuditRequest() {
+    async checkJournalStreamUiAuditRequest(
+        requestPath = `.obsidian/plugins/${this.manifest.id}/ui-audit-request.json`
+    ) {
         if (this.isProcessingUiAuditRequest) return;
-        const requestPath = `.obsidian/plugins/${this.manifest.id}/ui-audit-request.json`;
+        if (!(await this.app.vault.adapter.exists(requestPath))) return;
+        let consumeRequest = false;
         try {
             const {
                 runId,
-                openDefaultView,
-                targetFolder,
-                selectedRange,
-                copyExport,
-                settingsToggle,
-                previewEditSave,
-                externalChangeReload,
-                renameRefresh,
+                requestedAt,
                 listHeadingAudit,
                 pageStreamAudit,
                 blockLinkAudit,
+                targetProcessId,
             } = await this.readJournalStreamUiAuditRequest(requestPath);
-            if (runId === this.lastUiAuditRequestId) return;
+            if (
+                targetProcessId !== undefined &&
+                targetProcessId !== this.getRendererProcessId()
+            ) {
+                return;
+            }
+            const requestedAtMs = requestedAt ? Date.parse(requestedAt) : Number.NaN;
+            if (
+                Number.isFinite(requestedAtMs) &&
+                Date.now() - requestedAtMs > 10 * 60 * 1000
+            ) {
+                consumeRequest = true;
+                await this.writeAuditDebug("audit-request-expired", {
+                    runId,
+                    requestPath,
+                    requestedAt,
+                });
+                return;
+            }
+            if (this.processedUiAuditRequests.get(requestPath) === runId) return;
 
             await this.writeAuditDebug("audit-request-read", {
                 runId,
@@ -1918,7 +2402,9 @@ export default class DailyNoteViewPlugin extends Plugin {
             });
 
             this.lastUiAuditRequestId = runId;
+            this.processedUiAuditRequests.set(requestPath, runId);
             this.isProcessingUiAuditRequest = true;
+            consumeRequest = true;
             if (listHeadingAudit || pageStreamAudit || blockLinkAudit) {
                 await this.writeRoamWorkspaceUiAudit({
                     silent: true,
@@ -1929,32 +2415,14 @@ export default class DailyNoteViewPlugin extends Plugin {
                 });
                 return;
             }
-            let requestedView: DailyNoteView | null = null;
-            if (openDefaultView) {
-                if (targetFolder) {
-                    await this.openFolderView(
-                        targetFolder,
-                        "journalDate",
-                        selectedRange
-                    );
-                } else {
-                    await this.openDefaultJournalView();
-                }
-                requestedView = await this.waitForJournalStreamView(
-                    targetFolder,
-                    selectedRange
-                );
-            }
-            await this.writeJournalStreamUiAudit({
-                silent: true,
+            await this.writeJournalStreamUiAuditPayload(
+                `.obsidian/plugins/${this.manifest.id}/ui-audit-latest.json`,
+                {
                 runId,
-                view: requestedView,
-                copyExport,
-                settingsToggle,
-                previewEditSave,
-                externalChangeReload,
-                renameRefresh,
-            });
+                    status: "failed",
+                    reason: "legacy-journal-audit-removed",
+                }
+            );
         } catch (error) {
             console.error("Failed to process Journal Stream UI audit request:", error);
             await this.writeAuditDebug("audit-request-error", {
@@ -1962,7 +2430,25 @@ export default class DailyNoteViewPlugin extends Plugin {
             });
         } finally {
             this.isProcessingUiAuditRequest = false;
+            if (consumeRequest) {
+                try {
+                    if (await this.app.vault.adapter.exists(requestPath)) {
+                        await this.app.vault.adapter.remove(requestPath);
+                    }
+                } catch (error) {
+                    console.error("Failed to consume Journal Stream audit request:", error);
+                }
+            }
         }
+    }
+
+    private async checkAllJournalStreamUiAuditRequests(): Promise<void> {
+        await this.checkJournalStreamUiAuditRequest();
+        const processId = this.getRendererProcessId();
+        if (!processId) return;
+        await this.checkJournalStreamUiAuditRequest(
+            `.obsidian/plugins/${this.manifest.id}/ui-audit-request-${processId}.json`
+        );
     }
 
     async writeAuditDebug(event: string, details: Record<string, unknown> = {}) {
@@ -1988,17 +2474,23 @@ export default class DailyNoteViewPlugin extends Plugin {
         requestPath = `.obsidian/plugins/${this.manifest.id}/ui-audit-request.json`
     ): Promise<{
         runId: string;
+        requestedAt?: string;
         openDefaultView: boolean;
         targetFolder?: string;
         selectedRange?: TimeRange;
         copyExport?: boolean;
-        settingsToggle?: boolean;
-        previewEditSave?: boolean;
-        externalChangeReload?: boolean;
+            settingsToggle?: boolean;
+            previewEditSave?: boolean;
+            auditTargetReadiness?: boolean;
+            previewEditTransactionCleanup?: boolean;
+            productReadyBaseline?: boolean;
+            externalChangeReload?: boolean;
             renameRefresh?: boolean;
             listHeadingAudit?: boolean;
             pageStreamAudit?: boolean;
             blockLinkAudit?: boolean;
+            performanceAudit?: boolean;
+            targetProcessId?: number;
         }> {
         if (!(await this.app.vault.adapter.exists(requestPath))) {
             return { runId: "manual", openDefaultView: false };
@@ -2008,17 +2500,23 @@ export default class DailyNoteViewPlugin extends Plugin {
             await this.app.vault.adapter.read(requestPath)
         ) as {
             runId?: unknown;
+            requestedAt?: unknown;
             openDefaultView?: unknown;
             targetFolder?: unknown;
             selectedRange?: unknown;
             copyExport?: unknown;
             settingsToggle?: unknown;
             previewEditSave?: unknown;
+            auditTargetReadiness?: unknown;
+            previewEditTransactionCleanup?: unknown;
+            productReadyBaseline?: unknown;
             externalChangeReload?: unknown;
             renameRefresh?: unknown;
             listHeadingAudit?: unknown;
             pageStreamAudit?: unknown;
             blockLinkAudit?: unknown;
+            performanceAudit?: unknown;
+            targetProcessId?: unknown;
         };
         const runId =
             typeof request.runId === "string" && request.runId.trim()
@@ -2026,6 +2524,10 @@ export default class DailyNoteViewPlugin extends Plugin {
                 : "default";
         return {
             runId,
+            requestedAt:
+                typeof request.requestedAt === "string" && request.requestedAt.trim()
+                    ? request.requestedAt
+                    : undefined,
             openDefaultView: request.openDefaultView === true,
             targetFolder:
                 typeof request.targetFolder === "string" &&
@@ -2039,12 +2541,43 @@ export default class DailyNoteViewPlugin extends Plugin {
             copyExport: request.copyExport === true,
             settingsToggle: request.settingsToggle === true,
             previewEditSave: request.previewEditSave === true,
+            auditTargetReadiness: request.auditTargetReadiness === true,
+            previewEditTransactionCleanup:
+                request.previewEditTransactionCleanup === true,
+            productReadyBaseline: request.productReadyBaseline === true,
             externalChangeReload: request.externalChangeReload === true,
             renameRefresh: request.renameRefresh === true,
             listHeadingAudit: request.listHeadingAudit === true,
             pageStreamAudit: request.pageStreamAudit === true,
             blockLinkAudit: request.blockLinkAudit === true,
+            performanceAudit: request.performanceAudit === true,
+            targetProcessId:
+                typeof request.targetProcessId === "number" &&
+                Number.isInteger(request.targetProcessId) &&
+                request.targetProcessId > 0
+                    ? request.targetProcessId
+                    : undefined,
         };
+    }
+
+    private getRendererProcessId(): number | null {
+        const processId = (
+            window as Window & { process?: { pid?: unknown } }
+        ).process?.pid;
+        return typeof processId === "number" ? processId : null;
+    }
+
+    private getRuntimeObsidianVersionForAudit(): string {
+        const appWithVersion = this.app as unknown as {
+            getVersion?: () => unknown;
+        };
+        const apiVersion = appWithVersion.getVersion?.();
+        if (typeof apiVersion === "string" && apiVersion.trim()) {
+            return apiVersion;
+        }
+
+        const titleMatch = document.title.match(/Obsidian\s+([0-9]+(?:\.[0-9]+)+)/i);
+        return titleMatch?.[1] ?? "unknown";
     }
 
     async openListHeadingViewForAudit(): Promise<RoamListHeadingView | null> {
@@ -2053,273 +2586,16 @@ export default class DailyNoteViewPlugin extends Plugin {
         return leaf?.view instanceof RoamListHeadingView ? leaf.view : null;
     }
 
-    async auditSettingsToggle(view: DailyNoteView): Promise<Record<string, unknown>> {
-        const originalSettings = { ...this.settings };
-        try {
-            await view.prepareAuditSnapshot();
-            const before = view.getAuditSnapshot();
-
-            this.settings = {
-                ...this.settings,
-                enableExportMarkdown: false,
-            };
-            this.notifySettingsChanged();
-            await new Promise((resolve) => window.setTimeout(resolve, 100));
-            await view.prepareAuditSnapshot();
-            const afterDisabled = view.getAuditSnapshot();
-
-            this.settings = originalSettings;
-            this.notifySettingsChanged();
-            await this.saveSettings();
-            await new Promise((resolve) => window.setTimeout(resolve, 100));
-            await view.prepareAuditSnapshot();
-            const afterRestore = view.getAuditSnapshot();
-
-            const beforeExportButtons = before?.dom?.exportButtonCount ?? -1;
-            const disabledExportButtons =
-                afterDisabled?.dom?.exportButtonCount ?? -1;
-            const restoredExportButtons = afterRestore?.dom?.exportButtonCount ?? -1;
-            const passed =
-                disabledExportButtons === 0 &&
-                restoredExportButtons === beforeExportButtons &&
-                this.settings.enableExportMarkdown ===
-                    originalSettings.enableExportMarkdown;
-
-            return {
-                status: passed ? "passed" : "failed",
-                reason: passed ? undefined : "settings-toggle-did-not-update-dom",
-                before: {
-                    exportButtonCount: beforeExportButtons,
-                },
-                afterDisabled: {
-                    exportButtonCount: disabledExportButtons,
-                },
-                afterRestore: {
-                    exportButtonCount: restoredExportButtons,
-                },
-                restoredSettings: {
-                    journalFolder: this.settings.journalFolder,
-                    defaultOpenMode: this.settings.defaultOpenMode,
-                    initialRange: this.settings.initialRange,
-                    enableExportMarkdown: this.settings.enableExportMarkdown,
-                },
-            };
-        } catch (error) {
-            this.settings = originalSettings;
-            this.notifySettingsChanged();
-            await this.saveSettings();
-            return {
-                status: "failed",
-                reason: error instanceof Error ? error.message : String(error),
-            };
-        }
-    }
-
-    async waitForJournalStreamView(
-        targetFolder?: string,
-        selectedRange?: TimeRange
-    ): Promise<DailyNoteView | null> {
-        const deadline = Date.now() + 5000;
-        while (Date.now() < deadline) {
-            const view = this.findJournalStreamView(targetFolder, selectedRange);
-            if (view) {
-                await view.prepareAuditSnapshot();
-                return view;
-            }
-            await new Promise((resolve) => window.setTimeout(resolve, 100));
-        }
-        return null;
-    }
-
-    private findJournalStreamView(
-        targetFolder?: string,
-        selectedRange?: TimeRange
-    ): DailyNoteView | null {
-        if (!targetFolder && !selectedRange) return this.getCurrentJournalView();
-
-        for (const leaf of this.app.workspace.getLeavesOfType(DAILY_NOTE_VIEW_TYPE)) {
-            if (!(leaf.view instanceof DailyNoteView)) continue;
-            if (targetFolder && leaf.view.target !== targetFolder) continue;
-            if (selectedRange && leaf.view.selectedDaysRange !== selectedRange) continue;
-            return leaf.view;
-        }
-        return null;
-    }
-
-    async ensureTodaysDailyNoteExists() {
-        try {
-            const currentDate = moment();
-            const allDailyNotes = getAllDailyNotes();
-            const currentDailyNote = getDailyNote(currentDate, allDailyNotes);
-
-            if (!currentDailyNote) {
-                await createDailyNote(currentDate);
-            }
-        } catch (error) {
-            console.error("Failed to create daily note:", error);
-        }
-    }
-
-    initCssRules() {
-        document.body.toggleClass(
-            "daily-notes-hide-frontmatter",
-            this.settings.hideFrontmatter
-        );
-        document.body.toggleClass(
-            "daily-notes-hide-backlinks",
-            this.settings.hideBacklinks
-        );
-    }
-
-    patchWorkspace() {
-        let layoutChanging = false;
-        const uninstaller = around(Workspace.prototype, {
-            getActiveViewOfType: (next: any) =>
-                function (t: any) {
-                    const result = next.call(this, t);
-                    if (!result) {
-                        if (t?.VIEW_TYPE === "markdown") {
-                            const activeLeaf = this.activeLeaf;
-                            if (activeLeaf?.view instanceof DailyNoteView) {
-                                return activeLeaf.view.editMode;
-                            } else {
-                                return result;
-                            }
-                        }
-                    }
-                    return result;
-                },
-            changeLayout(old) {
-                return async function (workspace: unknown) {
-                    layoutChanging = true;
-                    try {
-                        // Don't consider hover popovers part of the workspace while it's changing
-                        await old.call(this, workspace);
-                    } finally {
-                        layoutChanging = false;
-                    }
-                };
-            },
-            iterateLeaves(old) {
-                type leafIterator = (item: WorkspaceLeaf) => boolean | void;
-                return function (arg1, arg2) {
-                    // Fast exit if desired leaf found
-                    if (old.call(this, arg1, arg2)) return true;
-
-                    // Handle old/new API parameter swap
-                    const cb: leafIterator = (
-                        typeof arg1 === "function" ? arg1 : arg2
-                    ) as leafIterator;
-                    const parent: WorkspaceItem = (
-                        typeof arg1 === "function" ? arg2 : arg1
-                    ) as WorkspaceItem;
-
-                    if (!parent) return false; // <- during app startup, rootSplit can be null
-                    if (layoutChanging) return false; // Don't let HEs close during workspace change
-
-                    // 0.14.x doesn't have WorkspaceContainer; this can just be an instanceof check once 15.x is mandatory:
-                    if (!requireApiVersion("0.15.0")) {
-                        if (
-                            parent === this.app.workspace.rootSplit ||
-                            (WorkspaceContainer &&
-                                parent instanceof WorkspaceContainer)
-                        ) {
-                            for (const popover of DailyNoteEditor.popoversForWindow(
-                                (parent as WorkspaceContainer).win
-                            )) {
-                                // Use old API here for compat w/0.14.x
-                                if (old.call(this, cb, popover.rootSplit))
-                                    return true;
-                            }
-                        }
-                    }
-                    return false;
-                };
-            },
-            setActiveLeaf: (next: any) =>
-                function (e: WorkspaceLeaf, t?: any) {
-                    if ((e as any).parentLeaf) {
-                        const parentLeaf = (e as any).parentLeaf;
-                        if ((e.view as any).editMode) {
-                            this.activeEditor = e.view;
-                            parentLeaf.view.editMode = e.view;
-                        }
-                        next.call(this, parentLeaf, t);
-                        return;
-                    }
-                    return next.call(this, e, t);
-                },
-        });
-        this.register(uninstaller);
-    }
-
-    // Used for patch workspaceleaf pinned behaviors
-    patchWorkspaceLeaf() {
-        this.register(
-            around(WorkspaceLeaf.prototype, {
-                getRoot(old) {
-                    return function () {
-                        const top = old.call(this);
-                        return top?.getRoot === this.getRoot
-                            ? top
-                            : top?.getRoot();
-                    };
-                },
-                setPinned(old) {
-                    return function (pinned: boolean) {
-                        old.call(this, pinned);
-                        if (isDailyNoteLeaf(this) && !pinned)
-                            this.setPinned(true);
-                    };
-                },
-                openFile(old) {
-                    return function (file: TFile, openState?: OpenViewState) {
-                        if (isDailyNoteLeaf(this)) {
-                            setTimeout(
-                                around(Workspace.prototype, {
-                                    recordMostRecentOpenedFile(old) {
-                                        return function (_file: TFile) {
-                                            // Don't update the quick switcher's recent list
-                                            if (_file !== file) {
-                                                return old.call(this, _file);
-                                            }
-                                        };
-                                    },
-                                }),
-                                1
-                            );
-                            const recentFiles =
-                                this.app.plugins.plugins[
-                                    "recent-files-obsidian"
-                                ];
-                            if (recentFiles)
-                                setTimeout(
-                                    around(recentFiles, {
-                                        shouldAddFile(old) {
-                                            return function (_file: TFile) {
-                                                // Don't update the Recent Files plugin
-                                                return (
-                                                    _file !== file &&
-                                                    old.call(this, _file)
-                                                );
-                                            };
-                                        },
-                                    }),
-                                    1
-                                );
-                        }
-                        return old.call(this, file, openState);
-                    };
-                },
-            })
-        );
-    }
-
     public async loadSettings() {
-        this.settings = restoreDailyNoteSettings(
-            await this.loadData(),
-            DEFAULT_SETTINGS
-        );
+        const storedSettings: unknown = await this.loadData();
+        this.settings = restoreDailyNoteSettings(storedSettings, DEFAULT_SETTINGS);
+        if (
+            !isRecord(storedSettings) ||
+            "journalEngine" in storedSettings ||
+            "journalV2Rollout" in storedSettings
+        ) {
+            await this.saveData(this.settings);
+        }
     }
 
     private recordRecentFile(file: TFile): void {
@@ -2327,8 +2603,137 @@ export default class DailyNoteViewPlugin extends Plugin {
         const next = recordRecentPath(this.settings.recentFiles, file.path);
         if (next === this.settings.recentFiles) return;
         this.settings.recentFiles = next;
-        this.refreshRecentFileViews();
+        this.promoteRecentFileInViews(file);
         this.persistRecentFiles();
+    }
+
+    private recordRecentTask(editor: Editor, file: TFile): void {
+        if (!this.settings.showRecentTasks || file.extension !== "md") return;
+        const next = reconcileRecentTaskRecordsForPath(
+            this.settings.recentTaskBlocks,
+            file.path,
+            editor.getValue(),
+            editor.getCursor().line,
+            Date.now()
+        );
+        if (recentTaskRecordsEqual(next, this.settings.recentTaskBlocks)) return;
+        this.settings.recentTaskBlocks = next;
+        this.refreshRecentTaskViews();
+        this.persistRecentTasks();
+    }
+
+    private async reconcileRecentTasksForFile(file: TFile): Promise<void> {
+        if (!this.settings.showRecentTasks || file.extension !== "md") return;
+        const text = await this.app.vault.cachedRead(file);
+        const next = reconcileRecentTaskRecordsForPath(
+            this.settings.recentTaskBlocks,
+            file.path,
+            text
+        );
+        if (recentTaskRecordsEqual(next, this.settings.recentTaskBlocks)) return;
+        this.settings.recentTaskBlocks = next;
+        this.refreshRecentTaskViews();
+        this.persistRecentTasks();
+    }
+
+    private async reconcileAllRecentTasks(): Promise<void> {
+        let next = this.settings.recentTaskBlocks;
+        const paths = new Set(next.map((record) => record.path));
+        for (const path of paths) {
+            const file = this.app.vault.getAbstractFileByPath(path);
+            if (!(file instanceof TFile) || file.extension !== "md") {
+                next = removeRecentTaskPath(next, path);
+                continue;
+            }
+            next = reconcileRecentTaskRecordsForPath(
+                next,
+                path,
+                await this.app.vault.cachedRead(file)
+            );
+        }
+        if (recentTaskRecordsEqual(next, this.settings.recentTaskBlocks)) return;
+        this.settings.recentTaskBlocks = next;
+        this.refreshRecentTaskViews();
+        await this.saveSettings();
+    }
+
+    private renameRecentTasks(oldPath: string, newPath: string): void {
+        const next = renameRecentTaskPath(
+            this.settings.recentTaskBlocks,
+            oldPath,
+            newPath
+        );
+        if (recentTaskRecordsEqual(next, this.settings.recentTaskBlocks)) return;
+        this.settings.recentTaskBlocks = next;
+        this.refreshRecentTaskViews();
+        this.persistRecentTasks();
+    }
+
+    private removeRecentTasks(path: string): void {
+        const next = removeRecentTaskPath(this.settings.recentTaskBlocks, path);
+        if (recentTaskRecordsEqual(next, this.settings.recentTaskBlocks)) return;
+        this.settings.recentTaskBlocks = next;
+        this.refreshRecentTaskViews();
+        this.persistRecentTasks();
+    }
+
+    getRecentTaskBlocks(): readonly RecentTaskBlockRecord[] {
+        return this.settings.recentTaskBlocks;
+    }
+
+    async openRecentTask(record: RecentTaskBlockRecord): Promise<void> {
+        const file = this.app.vault.getAbstractFileByPath(record.path);
+        if (!(file instanceof TFile) || file.extension !== "md") {
+            this.removeRecentTasks(record.path);
+            return;
+        }
+        const resolved = resolveRecentTaskRecord(
+            await this.app.vault.cachedRead(file),
+            record
+        );
+        if (!resolved) {
+            this.settings.recentTaskBlocks = this.settings.recentTaskBlocks.filter(
+                (candidate) => candidate !== record
+            );
+            this.refreshRecentTaskViews();
+            await this.saveSettings();
+            new Notice("Recent task could not be safely located.");
+            return;
+        }
+
+        const updated: RecentTaskBlockRecord = {
+            ...record,
+            lineHint: resolved.rootLine,
+            subtreeSignature: resolved.subtreeSignature,
+        };
+        this.settings.recentTaskBlocks = this.settings.recentTaskBlocks.map(
+            (candidate) => candidate === record ? updated : candidate
+        );
+        const existing = this.app.workspace
+            .getLeavesOfType("markdown")
+            .find((leaf) =>
+                leaf.view instanceof MarkdownView &&
+                leaf.view.file?.path === file.path
+            );
+        const leaf = existing ?? this.app.workspace.getLeaf(false);
+        if (!existing) {
+            await leaf.openFile(file, {
+                eState: { line: resolved.rootLine },
+                active: true,
+            });
+        } else {
+            await this.app.workspace.revealLeaf(leaf);
+        }
+        if (leaf.view instanceof MarkdownView) {
+            const position = { line: resolved.rootLine, ch: 0 };
+            leaf.view.editor.setCursor(position);
+            leaf.view.editor.scrollIntoView(
+                { from: position, to: position },
+                true
+            );
+            leaf.view.editor.focus();
+        }
+        this.persistRecentTasks();
     }
 
     private renameRecentFile(oldPath: string, newPath: string): void {
@@ -2361,21 +2766,34 @@ export default class DailyNoteViewPlugin extends Plugin {
         }
     }
 
+    private refreshRecentTaskViews(): void {
+        for (const leaf of this.app.workspace.getLeavesOfType(
+            ROAM_NAVIGATION_VIEW_TYPE
+        )) {
+            if (leaf.view instanceof RoamNavigationView) {
+                leaf.view.refreshRecentTasks();
+            }
+        }
+    }
+
+    private promoteRecentFileInViews(file: TFile): void {
+        for (const leaf of this.app.workspace.getLeavesOfType(
+            ROAM_NAVIGATION_VIEW_TYPE
+        )) {
+            if (leaf.view instanceof RoamNavigationView) {
+                leaf.view.promoteRecentFile(file);
+            }
+        }
+    }
+
     async saveSettings() {
         await this.saveData(this.settings);
     }
 
     notifySettingsChanged() {
-        this.settingsRevision = nextSettingsRevision(this.settingsRevision);
+        this.outlinerModule?.updateScope();
 
-        for (const leaf of this.app.workspace.getLeavesOfType(
-            DAILY_NOTE_VIEW_TYPE
-        )) {
-            const view = leaf.view;
-            if (view instanceof DailyNoteView) {
-                view.applySettingsRevision(this.settingsRevision);
-            }
-        }
+        if (this.settings.showRecentTasks) void this.reconcileAllRecentTasks();
 
         for (const leaf of this.app.workspace.getLeavesOfType(
             ROAM_NAVIGATION_VIEW_TYPE
@@ -2392,31 +2810,42 @@ export default class DailyNoteViewPlugin extends Plugin {
         if (currentDay !== this.lastCheckedDay) {
             this.lastCheckedDay = currentDay;
 
-            await this.ensureTodaysDailyNoteExists();
-
-            const dailyNoteLeaves =
-                this.app.workspace.getLeavesOfType(DAILY_NOTE_VIEW_TYPE);
-            if (dailyNoteLeaves.length > 0) {
-                for (const leaf of dailyNoteLeaves) {
-                    const view = leaf.view as DailyNoteView;
-                    if (view) {
-                        view.refreshForNewDay();
-                    }
+            for (const leaf of this.app.workspace.getLeavesOfType(
+                JOURNAL_VIEW_TYPE
+            )) {
+                if (leaf.view instanceof JournalV2View) {
+                    await leaf.view.refreshForNewDay();
                 }
             }
         }
     }
 }
 
-function formatJournalDateFilename(date: Date): string {
-    const year = String(date.getFullYear()).slice(2);
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}${month}${day}`;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
+}
+
+function readPageStreamAuditTargets(state: unknown): unknown[] {
+    if (!isRecord(state)) return [];
+    const targets: unknown = state.targets;
+    return Array.isArray(targets) ? targets as unknown[] : [];
+}
+
+function recentTaskRecordsEqual(
+    left: readonly RecentTaskBlockRecord[],
+    right: readonly RecentTaskBlockRecord[]
+): boolean {
+    if (left.length !== right.length) return false;
+    return left.every((record, index) => {
+        const candidate = right[index];
+        return (
+            candidate?.path === record.path &&
+            candidate.lineHint === record.lineHint &&
+            candidate.normalizedRootText === record.normalizedRootText &&
+            candidate.subtreeSignature === record.subtreeSignature &&
+            candidate.lastTouchedAt === record.lastTouchedAt
+        );
+    });
 }
 
 function getSnapshotTitles(snapshot: Record<string, unknown>): string[] {
@@ -2446,6 +2875,61 @@ function getNestedNumberOrFallback(
     return getNestedNumber(record, path, fallback) ?? fallback;
 }
 
+function getNestedStringArray(
+    record: Record<string, unknown>,
+    path: string[]
+): string[] {
+    let current: unknown = record;
+    for (const key of path) {
+        if (!isRecord(current)) return [];
+        current = current[key];
+    }
+    return Array.isArray(current)
+        ? current.filter((item): item is string => typeof item === "string")
+        : [];
+}
+
+function getPageStreamEditorDom(
+    view: PageStreamView,
+    path: string
+): Element | null {
+    return view.getCardElementForAudit(path)?.querySelector(".cm-editor") ?? null;
+}
+
+type RectAuditSnapshot = {
+    left: number;
+    top: number;
+};
+
+function getRectAuditSnapshot(
+    element: Element | null | undefined
+): RectAuditSnapshot | null {
+    if (!element) return null;
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, top: rect.top };
+}
+
+function numbersWithinTolerance(
+    before: number | null,
+    after: number | null,
+    tolerance: number
+): boolean {
+    return before !== null && after !== null && Math.abs(before - after) <= tolerance;
+}
+
+function rectOriginWithinTolerance(
+    before: RectAuditSnapshot | null,
+    after: RectAuditSnapshot | null,
+    tolerance: number
+): boolean {
+    return (
+        before !== null &&
+        after !== null &&
+        numbersWithinTolerance(before.left, after.left, tolerance) &&
+        numbersWithinTolerance(before.top, after.top, tolerance)
+    );
+}
+
 function safeStringify(value: unknown): string {
     const seen = new WeakSet<object>();
     return JSON.stringify(sanitizeAuditValue(value, seen), null, 2);
@@ -2462,7 +2946,10 @@ function sanitizeAuditValue(value: unknown, seen: WeakSet<object>, depth = 0): u
     }
     if (typeof value === "undefined") return undefined;
     if (typeof value === "function") return "[Function]";
-    if (typeof value !== "object") return String(value);
+    if (typeof value === "symbol" || typeof value === "bigint") {
+        return value.toString();
+    }
+    if (typeof value !== "object") return "[Unsupported audit value]";
     if (value instanceof HTMLElement) {
         return `[HTMLElement:${value.tagName.toLowerCase()}]`;
     }
@@ -2472,7 +2959,7 @@ function sanitizeAuditValue(value: unknown, seen: WeakSet<object>, depth = 0): u
     if (Array.isArray(value)) {
         return value.map((item) => sanitizeAuditValue(item, seen, depth + 1));
     }
-    const prototype = Object.getPrototypeOf(value);
+    const prototype = Reflect.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
         return `[${value.constructor?.name ?? "Object"}]`;
     }
@@ -2498,4 +2985,13 @@ function getMarkdownLeafAuditState(leaf: WorkspaceLeaf | null): {
             ch: cursor.ch,
         },
     };
+}
+
+function getActiveMarkdownAuditState(workspace: Workspace): {
+    path: string | null;
+    cursor: { line: number; ch: number } | null;
+} {
+    return getMarkdownLeafAuditState(
+        workspace.getActiveViewOfType(MarkdownView)?.leaf ?? null
+    );
 }

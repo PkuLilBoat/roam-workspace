@@ -1,3 +1,15 @@
+import type { Editor } from "obsidian";
+
+export function shouldRecordRecentEditorChange(
+    editor: Pick<Editor, "hasFocus">,
+    info: { contentEl?: HTMLElement },
+    activeElement: Element | null
+): boolean {
+    if (editor.hasFocus()) return true;
+    if (!activeElement || !info.contentEl?.contains(activeElement)) return false;
+    return activeElement.closest(".metadata-container") !== null;
+}
+
 export function restoreRecentPaths(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
 

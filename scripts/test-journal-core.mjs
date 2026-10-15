@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { unlink } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { build } from "esbuild";
 
 const outfile = "./.tmp-journal-core-test.mjs";
@@ -184,6 +186,76 @@ const { restoreDailyNoteSettings } = await import(
     `${pathToFileURL(settingsStateOutfile).href}?t=${Date.now()}`
 );
 
+const journalV2RoutingOutfile = "./.tmp-journal-v2-routing-test.mjs";
+await build({
+    entryPoints: ["./src/journal-v2/routing.ts"],
+    outfile: journalV2RoutingOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const { JOURNAL_VIEW_TYPE } = await import(
+    `${pathToFileURL(journalV2RoutingOutfile).href}?t=${Date.now()}`
+);
+
+const journalV2StateOutfile = "./.tmp-journal-v2-state-test.mjs";
+await build({
+    entryPoints: ["./src/journal-v2/model/journalState.ts"],
+    outfile: journalV2StateOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const { createJournalState, reduceJournalState } = await import(
+    `${pathToFileURL(journalV2StateOutfile).href}?t=${Date.now()}`
+);
+
+const journalV2ConflictOutfile = "./.tmp-journal-v2-conflict-test.mjs";
+await build({
+    entryPoints: ["./src/journal-v2/source/journalConflict.ts"],
+    outfile: journalV2ConflictOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const { classifyJournalModify, journalContentsEqual } = await import(
+    `${pathToFileURL(journalV2ConflictOutfile).href}?t=${Date.now()}`
+);
+
+const journalV2EditorReadinessOutfile = "./.tmp-journal-v2-editor-readiness-test.mjs";
+await build({
+    entryPoints: ["./src/journal-v2/editor/editorReadiness.ts"],
+    outfile: journalV2EditorReadinessOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const { resolveJournalEditorReadiness } = await import(
+    `${pathToFileURL(journalV2EditorReadinessOutfile).href}?t=${Date.now()}`
+);
+
+const journalV2EditorPoolOutfile = "./.tmp-journal-v2-editor-pool-test.mjs";
+await build({
+    entryPoints: ["./src/journal-v2/editor/JournalEditorPool.ts"],
+    outfile: journalV2EditorPoolOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const { JournalEditorPool } = await import(
+    `${pathToFileURL(journalV2EditorPoolOutfile).href}?t=${Date.now()}`
+);
+
 const recentFilesOutfile = "./.tmp-recent-files-test.mjs";
 await build({
     entryPoints: ["./src/utils/recentFiles.ts"],
@@ -199,6 +271,7 @@ const {
     removeRecentPath,
     renameRecentPath,
     restoreRecentPaths,
+    shouldRecordRecentEditorChange,
 } = await import(
     `${pathToFileURL(recentFilesOutfile).href}?t=${Date.now()}`
 );
@@ -215,6 +288,22 @@ await build({
 
 const { nextSettingsRevision } = await import(
     `${pathToFileURL(settingsRevisionOutfile).href}?t=${Date.now()}`
+);
+
+const outlinerScopeOutfile = "./.tmp-outliner-scope-test.mjs";
+await build({
+    entryPoints: ["./src/outliner/scope.ts"],
+    outfile: outlinerScopeOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const {
+    resolveOutlinerCapabilities,
+} = await import(
+    `${pathToFileURL(outlinerScopeOutfile).href}?t=${Date.now()}`
 );
 
 const fileSourceOutfile = "./.tmp-file-source-test.mjs";
@@ -280,6 +369,20 @@ const {
     shouldUnloadMarkdownPreview,
 } = await import(`${pathToFileURL(renderPolicyOutfile).href}?t=${Date.now()}`);
 
+const streamEditorPoolOutfile = "./.tmp-stream-editor-pool-test.mjs";
+await build({
+    entryPoints: ["./src/utils/streamEditorPool.ts"],
+    outfile: streamEditorPoolOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const { MAX_STREAM_EDITORS, StreamEditorPool } = await import(
+    `${pathToFileURL(streamEditorPoolOutfile).href}?t=${Date.now()}`
+);
+
 const pageStreamStackOutfile = "./.tmp-page-stream-stack-test.mjs";
 await build({
     entryPoints: ["./src/pageStreamStack.ts"],
@@ -294,6 +397,20 @@ const { pushPageStreamTarget, restorePageStreamTargets } = await import(
     `${pathToFileURL(pageStreamStackOutfile).href}?t=${Date.now()}`
 );
 
+const pageStreamReconcileOutfile = "./.tmp-page-stream-reconcile-test.mjs";
+await build({
+    entryPoints: ["./src/pageStreamReconcile.ts"],
+    outfile: pageStreamReconcileOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const { planPageStreamReconcile } = await import(
+    `${pathToFileURL(pageStreamReconcileOutfile).href}?t=${Date.now()}`
+);
+
 const listHeadingParserOutfile = "./.tmp-list-heading-parser-test.mjs";
 await build({
     entryPoints: ["./src/listHeadingParser.ts"],
@@ -304,22 +421,15 @@ await build({
     logLevel: "silent",
 });
 
-const { collectListHeadingItems, parseListHeadingItems } = await import(
+const {
+    collectListHeadingItems,
+    getListHeadingDescendantEnds,
+    getListHeadingItemKeys,
+    parseListHeadingItems,
+    reconcileListHeadingCollapsedKeys,
+    summarizeListHeadingDepths,
+} = await import(
     `${pathToFileURL(listHeadingParserOutfile).href}?t=${Date.now()}`
-);
-
-const pageStreamNativeRouterOutfile = "./.tmp-page-stream-native-router-test.mjs";
-await build({
-    entryPoints: ["./src/pageStreamRoutePolicy.ts"],
-    outfile: pageStreamNativeRouterOutfile,
-    bundle: true,
-    format: "esm",
-    platform: "node",
-    logLevel: "silent",
-});
-
-const { shouldRouteSplitToPageStream } = await import(
-    `${pathToFileURL(pageStreamNativeRouterOutfile).href}?t=${Date.now()}`
 );
 
 const outlinerPasteOutfile = "./.tmp-outliner-paste-test.mjs";
@@ -332,8 +442,61 @@ await build({
     logLevel: "silent",
 });
 
-const { normalizeOutlinerPaste } = await import(
+const { adaptOutlinerPasteToListContext, normalizeOutlinerPaste } = await import(
     `${pathToFileURL(outlinerPasteOutfile).href}?t=${Date.now()}`
+);
+
+const outlinerPasteExtensionOutfile = "./.tmp-outliner-paste-extension-test.mjs";
+await build({
+    entryPoints: ["./src/component/OutlinerPasteNormalize.ts"],
+    outfile: outlinerPasteExtensionOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    external: ["@codemirror/state", "@codemirror/view"],
+    logLevel: "silent",
+});
+
+const { createOutlinerPasteNormalizeExtension } = await import(
+    `${pathToFileURL(outlinerPasteExtensionOutfile).href}?t=${Date.now()}`
+);
+
+const builtInOutlinerModelOutfile = "./.tmp-built-in-outliner-model.mjs";
+await build({
+    entryPoints: ["./src/outliner/model.ts"],
+    outfile: builtInOutlinerModelOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+const builtInOutlinerPasteOutfile = "./.tmp-built-in-outliner-paste.mjs";
+await build({
+    entryPoints: ["./src/outliner/paste.ts"],
+    outfile: builtInOutlinerPasteOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+
+const builtInOutlinerModel = await import(
+    `${pathToFileURL(builtInOutlinerModelOutfile).href}?t=${Date.now()}`
+);
+const builtInOutlinerPaste = await import(
+    `${pathToFileURL(builtInOutlinerPasteOutfile).href}?t=${Date.now()}`
+);
+const builtInOutlinerSelectionOutfile = "./.tmp-built-in-outliner-selection.mjs";
+await build({
+    entryPoints: ["./src/outliner/selection.ts"],
+    outfile: builtInOutlinerSelectionOutfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+});
+const builtInOutlinerSelection = await import(
+    `${pathToFileURL(builtInOutlinerSelectionOutfile).href}?t=${Date.now()}`
 );
 
 const blockLinkOutfile = "./.tmp-block-link-test.mjs";
@@ -1344,7 +1507,20 @@ assert.deepEqual(
         showSourcePath: true,
         enableExportMarkdown: true,
         navigationViews: ["journal-stream"],
+        navigationSectionCollapsed: {
+            bookmarks: false,
+            recentFiles: false,
+            recentTasks: false,
+        },
+        recentFileClassFilter: [],
+        recentFileTagsFilter: [],
+        recentFilePropertyFilters: {},
         recentFiles: [],
+        showRecentTasks: false,
+        recentTaskBlocks: [],
+        recentTaskTagsFilter: [],
+        recentTaskPagesFilter: [],
+        outlinerScope: "stream-only",
         preset: [],
     },
     "default settings should open the Journal folder in a recent-30 bounded window with source paths and export enabled"
@@ -1366,7 +1542,28 @@ assert.deepEqual(
             "journal-stream",
             "page-stream",
         ],
+        navigationSectionCollapsed: {
+            bookmarks: true,
+            recentFiles: "yes",
+            recentTasks: false,
+        },
+        recentFileClassFilter: [" ProjectFile ", "ProjectFile", "", 2],
+        recentFileTagsFilter: [" work ", "work", null],
+        recentFilePropertyFilters: { status: [" text:active ", "text:active"], tags: ["ignored"] },
         recentFiles: [" Journal/one.md ", "Journal/two.md", "Journal/one.md", 2],
+        showRecentTasks: true,
+        recentTaskBlocks: [
+            {
+                path: " Task/demo.md ",
+                lineHint: 4,
+                normalizedRootText: " Demo task ",
+                subtreeSignature: " abc123 ",
+                lastTouchedAt: 50,
+            },
+            { path: "", lineHint: -1 },
+        ],
+        recentTaskTagsFilter: [" waiting ", "waiting"],
+        recentTaskPagesFilter: [" Projects/A.md ", "Projects/A.md"],
         preset: [
             { type: "folder", target: "Projects" },
             { type: "folder", target: " Projects " },
@@ -1383,7 +1580,27 @@ assert.deepEqual(
         journalFolder: "Journal/Work",
         showSourcePath: false,
         navigationViews: ["journal-stream", "page-stream"],
+        navigationSectionCollapsed: {
+            bookmarks: true,
+            recentFiles: false,
+            recentTasks: false,
+        },
+        recentFileClassFilter: ["ProjectFile"],
+        recentFileTagsFilter: ["work"],
+        recentFilePropertyFilters: { status: ["text:active"] },
         recentFiles: ["Journal/one.md", "Journal/two.md"],
+        showRecentTasks: true,
+        recentTaskBlocks: [
+            {
+                path: "Task/demo.md",
+                lineHint: 4,
+                normalizedRootText: "Demo task",
+                subtreeSignature: "abc123",
+                lastTouchedAt: 50,
+            },
+        ],
+        recentTaskTagsFilter: ["waiting"],
+        recentTaskPagesFilter: ["Projects/A.md"],
         preset: [
             { type: "folder", target: "Projects" },
             { type: "tag", target: "#journal" },
@@ -1423,10 +1640,412 @@ assert.deepEqual(
     ["journal-stream", "list-heading"],
     "settings restore should discard unknown Navigation ids and use canonical order"
 );
+assert.equal(
+    restoreDailyNoteSettings({ outlinerScope: "vault-wide" }).outlinerScope,
+    "vault-wide",
+    "settings restore should preserve a valid vault-wide Outliner scope"
+);
+assert.equal(
+    restoreDailyNoteSettings({ outlinerScope: "invalid" }).outlinerScope,
+    "stream-only",
+    "settings restore should fall back to Stream-only for an unknown Outliner scope"
+);
+const restoredSingleEngineSettings = restoreDailyNoteSettings({
+        journalEngine: "legacy",
+        journalV2Rollout: false,
+    });
+assert.deepEqual(
+    restoredSingleEngineSettings,
+    DEFAULT_SETTINGS,
+    "settings restore should ignore removed dual-engine migration fields"
+);
+assert.equal("journalEngine" in restoredSingleEngineSettings, false);
+assert.equal("journalV2Rollout" in restoredSingleEngineSettings, false);
+assert.equal(
+    JOURNAL_VIEW_TYPE,
+    "daily-note-editor-view",
+    "Journal V2 should own the stable canonical workspace view type"
+);
+const journalV2Query = {
+    selectionMode: "folder",
+    target: "Journal",
+    timeField: "journalDate",
+    selectedRange: "recent-30",
+    customRange: null,
+};
+const todayPath = "Journal/260915.md";
+const todayFile = file("260915", { path: todayPath });
+const historyFile = file("260914", { path: "Journal/260914.md" });
+const emptyHistoryFile = file("260913", { path: "Journal/260913.md" });
+const emptyTodayRecord = {
+    content: "  \n",
+    dateLabel: "2026-09-15",
+    dateTime: 1789401600000,
+    file: todayFile,
+    isStrictlyEmpty: true,
+    path: todayPath,
+};
+const historyRecord = {
+    content: "- history",
+    dateLabel: "2026-09-14",
+    dateTime: 1789315200000,
+    file: historyFile,
+    isStrictlyEmpty: false,
+    path: historyFile.path,
+};
+const emptyHistoryRecord = {
+    content: "",
+    dateLabel: "2026-09-13",
+    dateTime: 1789228800000,
+    file: emptyHistoryFile,
+    isStrictlyEmpty: true,
+    path: emptyHistoryFile.path,
+};
+const virtualToday = {
+    dateLabel: "2026-09-15",
+    dateTime: 1789401600000,
+    path: todayPath,
+    position: "first",
+};
+let journalV2State = createJournalState(journalV2Query);
+journalV2State = reduceJournalState(journalV2State, {
+    type: "replace-source",
+    records: [emptyTodayRecord, historyRecord, emptyHistoryRecord],
+    virtualToday,
+});
+assert.deepEqual(
+    journalV2State.items.map((item) => [item.key, item.isVirtualToday]),
+    [
+        [todayPath, true],
+        [historyFile.path, false],
+    ],
+    "V2 projection should replace an empty today file with one virtual card and hide empty history"
+);
+const stableHistoryItem = journalV2State.items[1];
+journalV2State = reduceJournalState(journalV2State, {
+    type: "replace-source",
+    records: [emptyTodayRecord, historyRecord, emptyHistoryRecord],
+    virtualToday,
+});
+assert.strictEqual(
+    journalV2State.items[1],
+    stableHistoryItem,
+    "unchanged Journal paths should keep their projection object across refresh"
+);
+const nonEmptyTodayRecord = {
+    ...emptyTodayRecord,
+    content: "- today",
+    isStrictlyEmpty: false,
+};
+journalV2State = reduceJournalState(journalV2State, {
+    type: "replace-source",
+    records: [nonEmptyTodayRecord, historyRecord],
+    virtualToday,
+});
+assert.deepEqual(
+    journalV2State.items.map((item) => [item.key, item.isVirtualToday]),
+    [
+        [todayPath, false],
+        [historyFile.path, false],
+    ],
+    "a non-empty today source should promote the same path key to a real card"
+);
+const reverseState = reduceJournalState(createJournalState(journalV2Query), {
+    type: "replace-source",
+    records: [historyRecord],
+    virtualToday: { ...virtualToday, position: "last" },
+});
+assert.deepEqual(
+    reverseState.items.map((item) => item.key),
+    [historyFile.path, todayPath],
+    "reverse ordering should place the virtual today card after real entries"
+);
+assert.equal(
+    classifyJournalModify(undefined, "external"),
+    "external-sync",
+    "a clean editor should accept an external file update"
+);
+assert.equal(
+    classifyJournalModify("draft", "draft"),
+    "local-save",
+    "matching disk and draft content should confirm the local save"
+);
+assert.equal(
+    classifyJournalModify("draft", "external"),
+    "external-conflict",
+    "different disk content must not overwrite a pending local draft"
+);
+assert.equal(
+    journalContentsEqual("draft", "draft\n"),
+    true,
+    "one final line break must not create a false save conflict"
+);
+const earlierFile = file("260912", { path: "Journal/260912.md" });
+const earlierRecord = {
+    content: "- earlier",
+    dateLabel: "2026-09-12",
+    dateTime: 1789142400000,
+    file: earlierFile,
+    isStrictlyEmpty: false,
+    path: earlierFile.path,
+};
+let incrementalState = reduceJournalState(createJournalState(journalV2Query), {
+    type: "replace-source",
+    records: [historyRecord, earlierRecord],
+    virtualToday,
+});
+const stableEarlierItem = incrementalState.items.find(
+    (item) => item.path === earlierFile.path
+);
+incrementalState = reduceJournalState(incrementalState, {
+    type: "upsert-source",
+    record: { ...historyRecord, content: "- history updated" },
+    virtualToday,
+});
+assert.strictEqual(
+    incrementalState.items.find((item) => item.path === earlierFile.path),
+    stableEarlierItem,
+    "updating one source path should preserve unrelated projection identity"
+);
+incrementalState = reduceJournalState(incrementalState, {
+    type: "remove-source",
+    path: historyFile.path,
+    virtualToday,
+});
+assert.deepEqual(
+    incrementalState.items.map((item) => item.path),
+    [todayPath, earlierFile.path],
+    "removing one source should leave unrelated cards and virtual today in place"
+);
+const renamedFile = file("260911", { path: "Journal/260911.md" });
+const renamedRecord = {
+    ...earlierRecord,
+    dateLabel: "2026-09-11",
+    dateTime: 1789056000000,
+    file: renamedFile,
+    path: renamedFile.path,
+};
+incrementalState = reduceJournalState(incrementalState, {
+    type: "rename-source",
+    oldPath: earlierFile.path,
+    record: renamedRecord,
+    virtualToday,
+});
+assert.deepEqual(
+    incrementalState.items.map((item) => item.path),
+    [todayPath, renamedFile.path],
+    "rename should replace only the old source key"
+);
+const readyEditorInput = {
+    actualPath: todayPath,
+    editorConnected: true,
+    expectedPath: todayPath,
+    hostShown: true,
+    leafConnected: true,
+    sessionId: "journal-v2-editor-1",
+    slotConnected: true,
+};
+assert.deepEqual(resolveJournalEditorReadiness(readyEditorInput), {
+    status: "ready",
+});
+assert.deepEqual(
+    resolveJournalEditorReadiness({
+        ...readyEditorInput,
+        actualPath: historyFile.path,
+    }),
+    { status: "waiting", reason: "path-not-matched" },
+    "a connected editor for the wrong file must not become ready"
+);
+assert.deepEqual(
+    resolveJournalEditorReadiness({
+        ...readyEditorInput,
+        editorConnected: false,
+    }),
+    { status: "waiting", reason: "editor-not-connected" },
+    "setViewState completion alone must not mark the editor ready"
+);
+const visibleActivity = {
+    collapsed: false,
+    distance: 0,
+    focused: false,
+    visible: true,
+};
+const offscreenActivity = {
+    collapsed: false,
+    distance: 100,
+    focused: false,
+    visible: false,
+};
+const poolEvictions = [];
+const journalEditorPool = new JournalEditorPool(2);
+journalEditorPool.acquire(
+    "visible",
+    () => poolEvictions.push("visible"),
+    visibleActivity
+);
+const farLease = journalEditorPool.acquire(
+    "far",
+    () => poolEvictions.push("far"),
+    { ...offscreenActivity, distance: 500 }
+);
+farLease.setActivity({
+    ...offscreenActivity,
+    collapsed: true,
+    distance: 500,
+});
+assert.deepEqual(poolEvictions, [], "collapsing must not release an editor");
+assert.equal(journalEditorPool.size, 2, "collapse must preserve the bounded pool entry");
+const nearLease = journalEditorPool.acquire(
+    "near",
+    () => poolEvictions.push("near"),
+    offscreenActivity
+);
+assert.equal(nearLease.granted, true);
+assert.deepEqual(
+    poolEvictions,
+    ["far"],
+    "pool pressure should release the farthest unpinned editor"
+);
+assert.deepEqual(journalEditorPool.keys(), ["visible", "near"]);
+
+const pinnedPool = new JournalEditorPool(2);
+pinnedPool.acquire("visible", () => undefined, visibleActivity);
+pinnedPool.acquire(
+    "focused",
+    () => undefined,
+    { ...offscreenActivity, focused: true }
+);
+const deniedLease = pinnedPool.acquire("waiting", () => undefined, offscreenActivity);
+assert.equal(deniedLease.granted, false, "all pinned editors must remain mounted");
+assert.deepEqual(pinnedPool.keys(), ["visible", "focused"]);
+const savingPool = new JournalEditorPool(1);
+savingPool.acquire(
+    "saving",
+    () => { throw new Error("pending save was evicted"); },
+    { ...offscreenActivity, pendingSave: true }
+);
+assert.equal(
+    savingPool.acquire("next", () => undefined, offscreenActivity).granted,
+    false,
+    "a pending native save must keep its editor until the disk catches up"
+);
+const priorityEvictions = [];
+const priorityPool = new JournalEditorPool(2);
+priorityPool.acquire(
+    "visible",
+    () => priorityEvictions.push("visible"),
+    visibleActivity
+);
+priorityPool.acquire(
+    "focused",
+    () => priorityEvictions.push("focused"),
+    { ...offscreenActivity, focused: true }
+);
+const priorityLease = priorityPool.acquire(
+    "today",
+    () => priorityEvictions.push("today"),
+    visibleActivity,
+    { allowVisibleEviction: true }
+);
+assert.equal(
+    priorityLease.granted,
+    true,
+    "an explicit user activation should preempt a visible but unfocused editor"
+);
+assert.deepEqual(priorityEvictions, ["visible"]);
+assert.deepEqual(priorityPool.keys(), ["focused", "today"]);
+
+const recentEvictions = [];
+const recentPool = new JournalEditorPool(2);
+const olderLease = recentPool.acquire(
+    "older",
+    () => recentEvictions.push("older"),
+    offscreenActivity
+);
+recentPool.acquire(
+    "newer",
+    () => recentEvictions.push("newer"),
+    offscreenActivity
+);
+olderLease.touch();
+recentPool.acquire("incoming", () => undefined, offscreenActivity);
+assert.deepEqual(
+    recentEvictions,
+    ["newer"],
+    "recent use should protect an otherwise equal offscreen editor"
+);
+const renamedEvictions = [];
+const renamePool = new JournalEditorPool(2);
+const staleRenamedLease = renamePool.acquire(
+    "Journal/old.md",
+    () => renamedEvictions.push("old"),
+    offscreenActivity
+);
+const renamedLease = renamePool.rename(
+    "Journal/old.md",
+    "Journal/new.md",
+    () => renamedEvictions.push("new")
+);
+assert.ok(renamedLease, "renaming a mounted editor should return its migrated lease");
+assert.deepEqual(
+    renamePool.keys(),
+    ["Journal/new.md"],
+    "renaming should preserve one pool entry under the new path"
+);
+staleRenamedLease.release();
+assert.deepEqual(
+    renamePool.keys(),
+    ["Journal/new.md"],
+    "the old lease must not release the migrated editor"
+);
+renamedLease.release();
+assert.deepEqual(renamedEvictions, ["new"]);
 assert.deepEqual(
     recordRecentPath(["A.md", "B.md", "C.md"], "C.md"),
     ["C.md", "A.md", "B.md"],
-    "opening a recent file should move it to the top without truncating history"
+    "recording an edited file should move it to the top without truncating history"
+);
+const metadataElement = {
+    closest: (selector) => selector === ".metadata-container" ? {} : null,
+};
+const bodyElement = { closest: () => null };
+const metadataInfo = {
+    contentEl: {
+        contains: (element) => element === metadataElement || element === bodyElement,
+    },
+};
+assert.equal(
+    shouldRecordRecentEditorChange({ hasFocus: () => true }, {}, null),
+    true,
+    "focused Markdown editors should update Recent files"
+);
+assert.equal(
+    shouldRecordRecentEditorChange(
+        { hasFocus: () => false },
+        metadataInfo,
+        metadataElement
+    ),
+    true,
+    "focused native Properties controls should update Recent files"
+);
+assert.equal(
+    shouldRecordRecentEditorChange(
+        { hasFocus: () => false },
+        metadataInfo,
+        bodyElement
+    ),
+    false,
+    "unfocused external editor synchronization should not update Recent files"
+);
+assert.deepEqual(
+    resolveOutlinerCapabilities("stream-only", true, true),
+    { selection: true, commands: false, paste: true },
+    "external Outliner must not disable Stream block selection"
+);
+assert.deepEqual(
+    resolveOutlinerCapabilities("off", true, false),
+    { selection: false, commands: false, paste: false },
+    "Outliner off scope must disable all built-in capabilities"
 );
 assert.deepEqual(
     renameRecentPath(["A.md", "B.md", "C.md"], "A.md", "B.md"),
@@ -1800,6 +2419,102 @@ assert.equal(
     "editing cards should reload the editor instead of refreshing preview in place"
 );
 
+const evictedEditors = [];
+const editorPool = new StreamEditorPool(2);
+const leaseA = editorPool.acquire("journal:a", () => evictedEditors.push("a"));
+const leaseB = editorPool.acquire("page:b", () => evictedEditors.push("b"));
+assert.equal(leaseA.granted, true);
+assert.equal(leaseB.granted, true);
+assert.deepEqual(editorPool.keys(), ["journal:a", "page:b"]);
+
+leaseA.touch();
+const leaseC = editorPool.acquire("journal:c", () => evictedEditors.push("c"));
+assert.equal(leaseC.granted, true);
+assert.deepEqual(evictedEditors, ["b"], "editor pool should evict the least recently used lease");
+assert.deepEqual(editorPool.keys(), ["journal:a", "journal:c"]);
+
+leaseA.setPinned(true);
+leaseC.setPinned(true);
+const rejectedLease = editorPool.acquire("page:d", () => evictedEditors.push("d"));
+assert.equal(rejectedLease.granted, false, "editor pool should not evict active pinned editors");
+assert.equal(editorPool.size, 2);
+
+leaseC.setPinned(false);
+const leaseD = editorPool.acquire("page:d", () => evictedEditors.push("d"));
+assert.equal(leaseD.granted, true);
+assert.deepEqual(evictedEditors, ["b", "c"]);
+assert.deepEqual(editorPool.keys(), ["journal:a", "page:d"]);
+
+leaseC.release();
+assert.deepEqual(
+    editorPool.keys(),
+    ["journal:a", "page:d"],
+    "a stale lease must not release a newer entry"
+);
+leaseA.release();
+assert.deepEqual(editorPool.keys(), ["page:d"]);
+
+const replacementPool = new StreamEditorPool(1);
+let originalReplacementEvictions = 0;
+let replacementEvictions = 0;
+const originalLease = replacementPool.acquire("same-key", () => {
+    originalReplacementEvictions += 1;
+});
+const replacementLease = replacementPool.acquire("same-key", () => undefined);
+assert.equal(
+    originalReplacementEvictions,
+    1,
+    "replacing a same-key lease must dispose the previous editor resource"
+);
+originalLease.release();
+originalLease.setPinned(true);
+originalLease.touch();
+assert.equal(
+    replacementPool.has("same-key"),
+    true,
+    "an older lease must not mutate or release a replacement lease for the same key"
+);
+const releasePool = new StreamEditorPool(1);
+const releaseLease = releasePool.acquire("release", () => {
+    replacementEvictions += 1;
+});
+releaseLease.release();
+assert.equal(replacementEvictions, 1, "release must dispose its editor resource");
+replacementLease.release();
+assert.equal(replacementPool.size, 0);
+
+const isolatedErrors = [];
+const errorPool = new StreamEditorPool(2, (error, key) => {
+    isolatedErrors.push({ error, key });
+});
+let successfulCleanupCount = 0;
+errorPool.acquire("throws", () => {
+    throw new Error("cleanup failed");
+});
+errorPool.acquire("cleans", () => {
+    successfulCleanupCount += 1;
+});
+errorPool.clear();
+assert.equal(successfulCleanupCount, 1, "one cleanup failure must not block later cleanup");
+assert.equal(isolatedErrors.length, 1);
+assert.equal(isolatedErrors[0].key, "throws");
+assert.equal(errorPool.size, 0);
+
+editorPool.clear();
+assert.deepEqual(evictedEditors, ["b", "c", "a", "d"]);
+assert.equal(editorPool.size, 0);
+assert.throws(
+    () => new StreamEditorPool(0),
+    /integer from 1 to 5/,
+    "editor pool should reject an invalid resource limit"
+);
+assert.equal(new StreamEditorPool().maxEditors, MAX_STREAM_EDITORS);
+assert.throws(
+    () => new StreamEditorPool(MAX_STREAM_EDITORS + 1),
+    /integer from 1 to 5/,
+    "editor pool should enforce the product-wide hard editor limit"
+);
+
 const firstPageTarget = {
     path: "A.md",
     kind: "file",
@@ -1866,6 +2581,65 @@ assert.deepEqual(
     "Page stream restore should drop missing files and duplicate paths"
 );
 
+const thirdPageTarget = {
+    path: "C.md",
+    kind: "file",
+    source: "command",
+    label: "C",
+};
+assert.deepEqual(
+    planPageStreamReconcile(
+        [firstPageTarget, secondPageTarget],
+        [thirdPageTarget, firstPageTarget, secondPageTarget]
+    ),
+    [{ type: "insert", index: 0, target: thirdPageTarget }],
+    "Page stream reconcile should insert a new top card without moving retained cards"
+);
+assert.deepEqual(
+    planPageStreamReconcile(
+        [firstPageTarget, secondPageTarget, thirdPageTarget],
+        [thirdPageTarget, firstPageTarget, secondPageTarget]
+    ),
+    [{ type: "move", index: 0, path: "C.md" }],
+    "Page stream reconcile should move only the repeated card to the top"
+);
+assert.deepEqual(
+    planPageStreamReconcile(
+        [firstPageTarget, secondPageTarget, thirdPageTarget],
+        [firstPageTarget, thirdPageTarget]
+    ),
+    [{ type: "remove", path: "B.md" }],
+    "Page stream reconcile should remove only the closed middle card"
+);
+assert.deepEqual(
+    planPageStreamReconcile(
+        [firstPageTarget, secondPageTarget],
+        [duplicateFirstTarget, secondPageTarget]
+    ),
+    [{ type: "update", index: 0, target: duplicateFirstTarget }],
+    "Page stream reconcile should update a changed target without replacing its card"
+);
+const trimPlan = planPageStreamReconcile(
+    [firstPageTarget, secondPageTarget],
+    [thirdPageTarget, firstPageTarget]
+);
+assert.deepEqual(
+    trimPlan,
+    [
+        { type: "remove", path: "B.md" },
+        { type: "insert", index: 0, target: thirdPageTarget },
+    ],
+    "Page stream reconcile should trim only the evicted tail before inserting"
+);
+assert.equal(
+    trimPlan.some(
+        (operation) =>
+            operation.type === "remove" && operation.path === firstPageTarget.path
+    ),
+    false,
+    "Page stream reconcile must not remove an unaffected retained path"
+);
+
 const outlineFixture = [
     "---",
     "fake: '# Not outline'",
@@ -1875,6 +2649,9 @@ const outlineFixture = [
     "- top block",
     "\t- child block",
     "\t\t- grand child block",
+    "\t\t\t- great grand child block",
+    "\t\t\t\t- deepest block",
+    "\t\t\t- ## Deep list heading",
     "  - space block",
     "```",
     "- ## fenced fake",
@@ -1900,38 +2677,47 @@ assert.deepEqual(
         { kind: "indent-block", title: "top block", line: 5, indentDepth: 0 },
         { kind: "indent-block", title: "child block", line: 6, indentDepth: 1 },
         { kind: "indent-block", title: "grand child block", line: 7, indentDepth: 2 },
-        { kind: "markdown-heading", title: "Second", line: 15, indentDepth: undefined },
-        { kind: "indent-block", title: "done task", line: 16, indentDepth: 0 },
-        { kind: "indent-block", title: "task with block", line: 17, indentDepth: 0 },
+        { kind: "indent-block", title: "great grand child block", line: 8, indentDepth: 3 },
+        { kind: "indent-block", title: "deepest block", line: 9, indentDepth: 4 },
+        { kind: "list-heading", title: "Deep list heading", line: 10, indentDepth: 3 },
+        { kind: "markdown-heading", title: "Second", line: 18, indentDepth: undefined },
+        { kind: "indent-block", title: "done task", line: 19, indentDepth: 0 },
+        { kind: "indent-block", title: "task with block", line: 20, indentDepth: 0 },
     ],
     "List heading parser should skip frontmatter, fenced code, comments, and space-indented list blocks"
 );
 
 assert.deepEqual(
-    collectListHeadingItems(outlineFixture, "headings-only").map(
+    collectListHeadingItems(outlineFixture, 0).map(
         (item) => `${item.kind}:${item.title}`
     ),
-    ["markdown-heading:Root", "list-heading:List heading", "markdown-heading:Second"],
-    "Headings-only mode should include Markdown headings and list headings"
+    [
+        "markdown-heading:Root",
+        "list-heading:List heading",
+        "list-heading:Deep list heading",
+        "markdown-heading:Second",
+    ],
+    "Depth 0 should include Markdown headings and list headings at every indent"
 );
 
 assert.deepEqual(
-    collectListHeadingItems(outlineFixture, "top-indent").map(
+    collectListHeadingItems(outlineFixture, 1).map(
         (item) => `${item.kind}:${item.title}`
     ),
     [
         "markdown-heading:Root",
         "list-heading:List heading",
         "indent-block:top block",
+        "list-heading:Deep list heading",
         "markdown-heading:Second",
         "indent-block:done task",
         "indent-block:task with block",
     ],
-    "Top indent mode should include only the shallowest tab/list depth"
+    "Depth 1 should include only the shallowest actual list depth"
 );
 
 assert.deepEqual(
-    collectListHeadingItems(outlineFixture, "top-two-indent").map(
+    collectListHeadingItems(outlineFixture, 2).map(
         (item) => `${item.kind}:${item.title}`
     ),
     [
@@ -1939,36 +2725,128 @@ assert.deepEqual(
         "list-heading:List heading",
         "indent-block:top block",
         "indent-block:child block",
+        "list-heading:Deep list heading",
         "markdown-heading:Second",
         "indent-block:done task",
         "indent-block:task with block",
     ],
-    "Top two indent mode should include the two shallowest tab/list depths"
+    "Depth 2 should include the two shallowest actual list depths"
 );
 
-const nativeRouteState = {
-    triggeredAt: 1_000,
-    sourcePath: "Source.md",
-};
-assert.equal(
-    shouldRouteSplitToPageStream(nativeRouteState, 1_100, "split"),
-    true,
-    "Native Page stream router should capture fresh split opens"
+assert.deepEqual(
+    [3, 4, 5].map((depth) =>
+        collectListHeadingItems(outlineFixture, depth).map((item) => item.title)
+    ),
+    [
+        [
+            "Root",
+            "List heading",
+            "top block",
+            "child block",
+            "grand child block",
+            "Deep list heading",
+            "Second",
+            "done task",
+            "task with block",
+        ],
+        [
+            "Root",
+            "List heading",
+            "top block",
+            "child block",
+            "grand child block",
+            "great grand child block",
+            "Deep list heading",
+            "Second",
+            "done task",
+            "task with block",
+        ],
+        [
+            "Root",
+            "List heading",
+            "top block",
+            "child block",
+            "grand child block",
+            "great grand child block",
+            "deepest block",
+            "Deep list heading",
+            "Second",
+            "done task",
+            "task with block",
+        ],
+    ],
+    "Depths 3-5 should cumulatively reveal relative list levels"
+);
+
+assert.deepEqual(
+    summarizeListHeadingDepths(outlineFixture),
+    {
+        availableDepth: 5,
+        cumulativeBlockCounts: [0, 3, 4, 5, 6, 7],
+    },
+    "Depth summary should report five actual relative levels and cumulative counts"
+);
+
+assert.deepEqual(getListHeadingDescendantEnds([]), [], "An empty outline has no subtrees");
+const mixedOutline = collectListHeadingItems("# Root\n- A\n### Section\n- B", 5);
+assert.deepEqual(
+    getListHeadingDescendantEnds(mixedOutline),
+    [4, 2, 4, 4],
+    "A list block must not fold the next heading section"
+);
+assert.deepEqual(
+    getListHeadingItemKeys(mixedOutline),
+    getListHeadingItemKeys(collectListHeadingItems("\n# Root\n\n- A\n### Section\n- B", 5)),
+    "Inserting blank lines must preserve folding identities"
+);
+const duplicateOutline = parseListHeadingItems("# Root\n- Parent\n\t- Child\n- Parent\n\t- Child\n## Section\n- Parent\n\t- Child");
+const duplicateKeys = getListHeadingItemKeys(duplicateOutline);
+assert.equal(new Set(duplicateKeys).size, duplicateKeys.length, "Duplicate labels must have distinct folding identities");
+const fewerDuplicateKeys = getListHeadingItemKeys(parseListHeadingItems("# Root\n- Parent\n\t- Child\n## Section\n- Parent\n\t- Child"));
+assert.deepEqual(
+    [...reconcileListHeadingCollapsedKeys(duplicateKeys, fewerDuplicateKeys, new Set([duplicateKeys[1], duplicateKeys[3]]))],
+    [],
+    "Deleting a duplicate parent must not transfer its collapse state to another sibling"
 );
 assert.equal(
-    shouldRouteSplitToPageStream(nativeRouteState, 1_800, "split"),
-    false,
-    "Native Page stream router should ignore stale split opens"
+    reconcileListHeadingCollapsedKeys(duplicateKeys, [], new Set(duplicateKeys)).size,
+    0,
+    "Clearing an outline must clear removed folding identities"
 );
-assert.equal(
-    shouldRouteSplitToPageStream(nativeRouteState, 1_100, "tab"),
-    false,
-    "Native Page stream router should only capture split opens"
+const filteredOffsets = new Set(collectListHeadingItems("# Root\n- Parent\n\t- Child\n- Parent\n\t- Child\n## Section\n- Parent\n\t- Child", 1).map(item => item.offset));
+assert.deepEqual(
+    duplicateKeys.filter((_, index) => filteredOffsets.has(duplicateOutline[index].offset)),
+    getListHeadingItemKeys(duplicateOutline.filter(item => filteredOffsets.has(item.offset))),
+    "Changing visible depth must preserve parent folding identities"
 );
-assert.equal(
-    shouldRouteSplitToPageStream(null, 1_100, "split"),
-    false,
-    "Native Page stream router should ignore absent route state"
+assert.deepEqual(
+    getListHeadingDescendantEnds(collectListHeadingItems(outlineFixture, 5)),
+    [11, 7, 7, 7, 7, 7, 7, 8, 11, 10, 11],
+    "Subtrees should stop before a same-level sibling, retain nested descendants, and exclude fenced/comment items"
+);
+assert.deepEqual(
+    getListHeadingDescendantEnds(collectListHeadingItems(outlineFixture, 0)),
+    [4, 2, 3, 4],
+    "Heading-only mode should not offer folds for hidden blocks or leaf headings"
+);
+assert.deepEqual(
+    getListHeadingDescendantEnds(collectListHeadingItems("- A\n\t- A1\n\t\t- A1a\n\t- A2\n- B\n\t- B1\n- C", 5)),
+    [4, 3, 3, 4, 6, 6, 7],
+    "Block folding should include all descendants without swallowing adjacent parent blocks"
+);
+
+const sparseDepthFixture = [
+    "# Sparse",
+    "\t\t- first actual depth",
+    "\t\t\t\t- second actual depth",
+].join("\n");
+assert.deepEqual(
+    summarizeListHeadingDepths(sparseDepthFixture),
+    {
+        availableDepth: 2,
+        cumulativeBlockCounts: [0, 1, 2, 2, 2, 2],
+    },
+    "List depth should be relative to actual indentation levels, not absolute tab count"
 );
 
 assert.deepEqual(
@@ -2048,6 +2926,237 @@ assert.deepEqual(
     { text: calloutPaste, changed: false, reason: "protected" },
     "Outliner paste should protect callouts"
 );
+assert.equal(
+    adaptOutlinerPasteToListContext("- alpha\n- beta", {
+        lineText: "\t- ",
+        cursorColumn: 3,
+    }),
+    "alpha\n\t- beta",
+    "Outliner paste should fill an empty nested item and keep following items at its level"
+);
+assert.equal(
+    adaptOutlinerPasteToListContext("- alpha\n\t- child\n- sibling", {
+        lineText: "\t- existing ",
+        cursorColumn: 12,
+    }),
+    "alpha\n\t\t- child\n\t- sibling",
+    "Outliner paste should preserve pasted hierarchy relative to the current list depth"
+);
+assert.equal(
+    adaptOutlinerPasteToListContext("- alpha\n- sibling", {
+        lineText: "\t- existing",
+        cursorColumn: 11,
+    }),
+    " alpha\n\t- sibling",
+    "Outliner paste should separate inserted text from existing list content"
+);
+assert.equal(
+    adaptOutlinerPasteToListContext(tablePaste, {
+        lineText: "\t- ",
+        cursorColumn: 3,
+    }),
+    tablePaste,
+    "Outliner paste context should not rewrite protected non-list Markdown"
+);
+const nestedPasteState = EditorState.create({
+    doc: "\t- ",
+    selection: { anchor: 3 },
+    extensions: [createOutlinerPasteNormalizeExtension()],
+});
+const nestedPasteFilters = nestedPasteState.facet(EditorView.clipboardInputFilter);
+assert.equal(nestedPasteFilters.length, 1);
+assert.equal(
+    nestedPasteFilters[0]("- alpha\n - sibling\n   - child", nestedPasteState),
+    "alpha\n\t- sibling\n\t\t- child",
+    "CodeMirror clipboard filter should normalize external indentation at the active list depth"
+);
+
+const pasteFixtures = JSON.parse(
+    await readFile("./scripts/fixtures/outliner/paste-cases.json", "utf8")
+);
+for (const fixture of pasteFixtures) {
+    const actual = builtInOutlinerPaste.normalizeOutlinerPaste(fixture.input);
+    assert.equal(actual.text, fixture.expected, `${fixture.name}: normalized text`);
+    assert.equal(actual.reason, fixture.reason, `${fixture.name}: reason`);
+}
+assert.equal(
+    builtInOutlinerPaste.adaptPasteToListContext(
+        "1. first\n\t2. child\n3. sibling",
+        "\t- existing",
+        11
+    ),
+    "\n\t\t- first\n\t\t\t- child\n\t\t- sibling",
+    "built-in Outliner should insert normalized roots as children of a nonempty block"
+);
+assert.deepEqual(
+    builtInOutlinerPaste.planListContextPaste(
+        "- B\n  - C\n- D",
+        "- A",
+        3
+    ),
+    {
+        fromColumn: 3,
+        toColumn: 3,
+        insert: "\n\t- B\n\t\t- C\n\t- D",
+        placement: "insert-children",
+    },
+    "nonempty list blocks should receive pasted roots at the next child level"
+);
+assert.deepEqual(
+    builtInOutlinerPaste.planListContextPaste("B\nC", "\t- ", 3),
+    {
+        fromColumn: 0,
+        toColumn: 3,
+        insert: "\t- B\n\t- C",
+        placement: "replace-empty",
+    },
+    "empty list blocks should be replaced at their existing depth"
+);
+assert.equal(
+    builtInOutlinerPaste.planListContextPaste("B\nC", "plain paragraph", 5),
+    null,
+    "non-list destinations should preserve native paste behavior"
+);
+assert.equal(
+    builtInOutlinerPaste.planListContextPaste(
+        "```md\n- literal\n```",
+        "- target",
+        8
+    ),
+    null,
+    "protected Markdown should preserve native paste behavior in a list block"
+);
+
+assert.deepEqual(
+    builtInOutlinerModel.indentListSubtree(
+        "- first\n- second\n\t- child\n- third",
+        1
+    ),
+    {
+        fromLine: 1,
+        toLine: 2,
+        replacement: "\t- second\n\t\t- child",
+    },
+    "Tab should indent a list item together with its subtree"
+);
+assert.deepEqual(
+    builtInOutlinerModel.outdentListSubtree(
+        "- first\n\t- second\n\t\t- child",
+        1
+    ),
+    {
+        fromLine: 1,
+        toLine: 2,
+        replacement: "- second\n\t- child",
+    },
+    "Shift-Tab should outdent a list item together with its subtree"
+);
+assert.deepEqual(
+    builtInOutlinerModel.moveListSubtree(
+        "- first\n\t- first child\n- second\n\t- second child",
+        2,
+        "up"
+    ),
+    {
+        text: "- second\n\t- second child\n- first\n\t- first child",
+        cursorLine: 0,
+    },
+    "list movement should keep each subtree intact"
+);
+assert.equal(
+    builtInOutlinerModel.buildNewSiblingPrefix({
+        indent: "\t",
+        marker: "9.",
+        checkbox: "x",
+        content: "done",
+        prefixLength: 9,
+    }),
+    "\t10. [ ] ",
+    "Enter should increment ordered markers and reset checkbox state"
+);
+assert.equal(
+    builtInOutlinerModel.toggleCheckboxLine("\t- [ ] 中文任务"),
+    "\t- [x] 中文任务",
+    "checkbox toggle should preserve Chinese content"
+);
+
+const blockSelectionLines = [
+    "- parent",
+    "\t- child",
+    "\t\t- grandchild",
+    "- sibling",
+    "\t- sibling child",
+    "- final",
+];
+const childSelection = builtInOutlinerSelection.createBlockSelection(1);
+assert.deepEqual(
+    builtInOutlinerSelection.resolveBlockSelection(
+        blockSelectionLines,
+        childSelection
+    ),
+    { fromLine: 1, toLine: 2 },
+    "clicking a child block should select that child and its descendants"
+);
+assert.equal(
+    builtInOutlinerSelection.serializeBlockSelection(
+        blockSelectionLines,
+        childSelection
+    ),
+    "- child\n\t- grandchild",
+    "copied child subtrees should be rebased to their shallowest selected indent"
+);
+const parentSelection = builtInOutlinerSelection.createBlockSelection(0);
+const expandedDown = builtInOutlinerSelection.adjustBlockSelection(
+    blockSelectionLines,
+    parentSelection,
+    "down"
+);
+assert.deepEqual(
+    builtInOutlinerSelection.resolveBlockSelection(
+        blockSelectionLines,
+        expandedDown
+    ),
+    { fromLine: 0, toLine: 4 },
+    "Shift-Down should append the next sibling and its complete subtree"
+);
+const shrunkUp = builtInOutlinerSelection.adjustBlockSelection(
+    blockSelectionLines,
+    expandedDown,
+    "up"
+);
+assert.deepEqual(
+    builtInOutlinerSelection.resolveBlockSelection(
+        blockSelectionLines,
+        shrunkUp
+    ),
+    { fromLine: 0, toLine: 2 },
+    "Shift-Up should shrink a downward structural selection by one subtree"
+);
+const expandedUp = builtInOutlinerSelection.adjustBlockSelection(
+    blockSelectionLines,
+    childSelection,
+    "up"
+);
+assert.deepEqual(
+    builtInOutlinerSelection.resolveBlockSelection(
+        blockSelectionLines,
+        expandedUp
+    ),
+    { fromLine: 0, toLine: 2 },
+    "Shift-Up from a child should include the preceding parent and its hidden descendants"
+);
+assert.deepEqual(
+    builtInOutlinerSelection.resolveBlockSelection(
+        blockSelectionLines,
+        builtInOutlinerSelection.adjustBlockSelection(
+            blockSelectionLines,
+            expandedUp,
+            "down"
+        )
+    ),
+    { fromLine: 1, toLine: 2 },
+    "Shift-Down should shrink an upward selection back to its anchor subtree"
+);
 
 assert.equal(findBlockId("- item ^abc-123"), "abc-123");
 assert.equal(findBlockId("- item"), null);
@@ -2082,6 +3191,30 @@ assert.match(
     "Generated block ids should use Obsidian-compatible characters"
 );
 
+const journalStyles = await readFile("./src/style/index.css", "utf8");
+for (const selector of [
+    ".journal-v2__source-button[hidden]",
+    ".journal-v2__date-icon[hidden]",
+    ".journal-v2__virtual-action[hidden]",
+    ".journal-v2__card-placeholder[hidden]",
+]) {
+    assert.match(
+        journalStyles,
+        new RegExp(
+            `${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^}]*display:\\s*none`,
+            "s"
+        ),
+        `${selector} must remain hidden even when Obsidian button styles override the HTML default`
+    );
+}
+for (const legacySelector of [".daily-note-view", ".daily-note-container"]) {
+    assert.doesNotMatch(
+        journalStyles,
+        new RegExp(legacySelector.replaceAll(".", "\\.")),
+        "Removed Legacy selectors must not remain in the final stylesheet"
+    );
+}
+
 console.log("journalCore tests passed");
 
 await Promise.allSettled([
@@ -2098,14 +3231,25 @@ await Promise.allSettled([
     unlink(settingsStateOutfile),
     unlink(recentFilesOutfile),
     unlink(settingsRevisionOutfile),
+    unlink(outlinerScopeOutfile),
+    unlink(journalV2RoutingOutfile),
+    unlink(journalV2StateOutfile),
+    unlink(journalV2ConflictOutfile),
+    unlink(journalV2EditorReadinessOutfile),
+    unlink(journalV2EditorPoolOutfile),
     unlink(fileSourceOutfile),
     unlink(incrementalFileSetOutfile),
     unlink(renderWindowOutfile),
     unlink(renderPolicyOutfile),
+    unlink(streamEditorPoolOutfile),
     unlink(pageStreamStackOutfile),
+    unlink(pageStreamReconcileOutfile),
     unlink(listHeadingParserOutfile),
-    unlink(pageStreamNativeRouterOutfile),
     unlink(outlinerPasteOutfile),
+    unlink(outlinerPasteExtensionOutfile),
+    unlink(builtInOutlinerModelOutfile),
+    unlink(builtInOutlinerPasteOutfile),
+    unlink(builtInOutlinerSelectionOutfile),
     unlink(blockLinkOutfile),
 ]);
 

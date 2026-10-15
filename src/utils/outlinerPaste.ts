@@ -12,6 +12,11 @@ export interface PasteNormalizeResult {
     reason: PasteNormalizeReason;
 }
 
+export interface OutlinerPasteContext {
+    lineText: string;
+    cursorColumn: number;
+}
+
 const LIST_LINE_RE = /^(\s*)([-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?(.+?)\s*$/;
 
 export function normalizeOutlinerPaste(text: string): PasteNormalizeResult {
@@ -48,6 +53,39 @@ export function normalizeOutlinerPaste(text: string): PasteNormalizeResult {
         changed: true,
         reason: hasList ? "list" : "paragraphs",
     };
+}
+
+export function adaptOutlinerPasteToListContext(
+    text: string,
+    context: OutlinerPasteContext
+): string {
+    if (!text.includes("\n")) return text;
+
+    const currentListPrefix = context.lineText.match(
+        /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/
+    );
+    if (!currentListPrefix || context.cursorColumn < currentListPrefix[0].length) {
+        return text;
+    }
+
+    const lines = text.split("\n");
+    const firstListItem = lines[0].match(
+        /^\s*(?:[-*+]|\d+[.)])\s+((?:\[[ xX]\]\s+)?[^\n]*)$/
+    );
+    if (!firstListItem) return text;
+
+    const baseIndent = currentListPrefix[1];
+    const contentBeforeCursor = context.lineText.slice(
+        currentListPrefix[0].length,
+        context.cursorColumn
+    );
+    const firstLinePrefix = contentBeforeCursor && !/\s$/.test(contentBeforeCursor)
+        ? " "
+        : "";
+    return [
+        `${firstLinePrefix}${firstListItem[1]}`,
+        ...lines.slice(1).map((line) => (line ? `${baseIndent}${line}` : line)),
+    ].join("\n");
 }
 
 function normalizeListPaste(lines: string[]): string[] {

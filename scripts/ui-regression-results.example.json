@@ -3,8 +3,8 @@
   "runAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
   "operator": "computer-use",
   "environment": {
-    "vaultRoot": "example-vault",
-    "pluginId": "roam-in-ob",
+    "vaultRoot": "/Users/feng/Documents/OBSIDIAN/TEST",
+    "pluginId": "roam-workspace",
     "obsidianVersion": "recorded-during-run",
     "viewport": "recorded-during-run"
   },

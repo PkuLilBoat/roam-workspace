@@ -1,17 +1,16 @@
 import { readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { resolveTestVaultRoot } from "./test-vault-root.mjs";
 
-const pluginId = "roam-in-ob";
-const vaultRoot = process.env.ROAM_IN_OB_VAULT_ROOT;
-if (!vaultRoot) {
-    throw new Error("Set ROAM_IN_OB_VAULT_ROOT to the test vault path.");
-}
+const pluginId = "roam-workspace";
+const vaultRoot = resolveTestVaultRoot();
 const installedPluginDir = path.join(vaultRoot, ".obsidian", "plugins", pluginId);
 const sourceRoot = process.cwd();
 const requiredFiles = ["manifest.json", "main.js", "styles.css"];
 const failures = [];
 const warnings = [];
+const buildInfo = await readBuildInfo();
 
 await checkCommunityPluginEnabled();
 await checkInstalledFiles();
@@ -66,6 +65,12 @@ async function checkInstalledFiles() {
                 `Installed ${filename} hash mismatch: source=${sourceHash} installed=${installedHash}`
             );
         }
+        const expectedHash = buildInfo.artifactHashes?.[filename];
+        if (!expectedHash || sourceHash !== expectedHash) {
+            failures.push(
+                `Current build info ${filename} hash mismatch: expected=${expectedHash} source=${sourceHash}`
+            );
+        }
     }
 }
 
@@ -77,6 +82,38 @@ async function checkManifest() {
     if (manifest.id !== pluginId) {
         failures.push(`Installed manifest id must be ${pluginId}, got ${manifest.id}`);
     }
+    if (
+        buildInfo.manifestId !== manifest.id ||
+        buildInfo.manifestVersion !== manifest.version
+    ) {
+        failures.push(
+            `Build manifest identity mismatch: build=${buildInfo.manifestId}@${buildInfo.manifestVersion} installed=${manifest.id}@${manifest.version}`
+        );
+    }
+}
+
+async function readBuildInfo() {
+    const buildInfoPath = path.join(
+        sourceRoot,
+        "artifacts",
+        "current-build-info.json"
+    );
+    const value = JSON.parse(await readFile(buildInfoPath, "utf8"));
+    for (const field of [
+        "head",
+        "sourceStateHash",
+        "buildId",
+        "builtAt",
+        "manifestId",
+        "manifestVersion",
+        "artifactHashes",
+    ]) {
+        if (!value[field]) failures.push(`Current build info missing ${field}`);
+    }
+    if (typeof value.dirty !== "boolean") {
+        failures.push("Current build info dirty must be boolean");
+    }
+    return value;
 }
 
 async function checkWorkspaceState() {
@@ -89,28 +126,28 @@ async function checkWorkspaceState() {
     const workspaceText = await readFile(workspacePath, "utf8");
     if (!workspaceText.includes("daily-note-editor-view")) {
         warnings.push(
-            "workspace.json does not currently contain daily-note-editor-view; install state is OK but UI view is not open/restored"
+            "workspace.json does not currently contain a Journal view; install state is OK but UI view is not open/restored"
         );
         return;
     }
 
     const workspace = JSON.parse(workspaceText);
-    const matchingStates = [];
-    collectDailyNoteEditorStates(workspace, matchingStates);
+    const journalStates = [];
+    collectJournalStates(workspace, journalStates);
 
-    if (matchingStates.length === 0) {
+    if (journalStates.length === 0) {
         warnings.push(
-            "workspace.json contains daily-note-editor-view text but no parseable state object was found"
+            "workspace.json contains Journal view text but no parseable state object was found"
         );
         return;
     }
 
     console.log(
-        `Workspace contains ${matchingStates.length} daily-note-editor-view state object(s)`
+        `Workspace contains ${journalStates.length} canonical Journal view state object(s)`
     );
 }
 
-function collectDailyNoteEditorStates(value, matches) {
+function collectJournalStates(value, matches) {
     if (!value || typeof value !== "object") return;
 
     if (value.type === "daily-note-editor-view") {
@@ -119,7 +156,7 @@ function collectDailyNoteEditorStates(value, matches) {
 
     for (const child of Object.values(value)) {
         if (child && typeof child === "object") {
-            collectDailyNoteEditorStates(child, matches);
+            collectJournalStates(child, matches);
         }
     }
 }

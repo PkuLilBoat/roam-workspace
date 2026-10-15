@@ -1,16 +1,20 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { resolveTestVaultRoot } from "./test-vault-root.mjs";
 
-const vaultRoot = process.env.ROAM_IN_OB_VAULT_ROOT;
-if (!vaultRoot) {
-    throw new Error("Set ROAM_IN_OB_VAULT_ROOT to the test vault path.");
-}
-const pluginDir = path.join(vaultRoot, ".obsidian", "plugins", "roam-in-ob");
-const auditPath = path.join(pluginDir, "ui-audit-latest.json");
+const vaultRoot = resolveTestVaultRoot();
+const pluginDir = path.join(
+    vaultRoot,
+    ".obsidian",
+    "plugins",
+    "roam-workspace"
+);
+const auditPath = `${pluginDir}/ui-audit-latest.json`;
 const args = process.argv.slice(2).filter((arg) => arg !== "--");
 const runId = args.find((arg) => !arg.startsWith("--"));
 const timeoutArg = args.find((arg) => arg.startsWith("--timeout-ms="));
 const timeoutMs = timeoutArg ? Number(timeoutArg.split("=")[1]) : 15000;
+const expectedProcessId = Number(process.env.JOURNAL_STREAM_AUDIT_PROCESS_ID);
 const start = Date.now();
 
 if (!runId) {
@@ -20,7 +24,12 @@ if (!runId) {
 
 while (Date.now() - start < timeoutMs) {
     const audit = await readAudit();
-    if (audit?.runId === runId) {
+    if (
+        audit?.runId === runId &&
+        (!Number.isInteger(expectedProcessId) ||
+            expectedProcessId <= 0 ||
+            audit.processId === expectedProcessId)
+    ) {
         console.log(`Journal Stream UI audit observed: ${auditPath}`);
         console.log(`status: ${audit.status}`);
         if (audit.reason) console.log(`reason: ${audit.reason}`);

@@ -8,20 +8,24 @@ import {
     WorkspaceLeaf,
 } from "obsidian";
 import type DailyNoteViewPlugin from "./dailyNoteViewIndex";
-import { collectListHeadingItems } from "./listHeadingParser";
 import {
-    ListHeadingItem,
-    ListHeadingMode,
+    collectListHeadingItems,
+    getListHeadingDescendantEnds,
+    getListHeadingItemKeys,
+    parseListHeadingItems,
+    reconcileListHeadingCollapsedKeys,
+    summarizeListHeadingDepths,
+} from "./listHeadingParser";
+import type { ListHeadingDepthSummary } from "./listHeadingParser";
+import {
+    isListHeadingDepth,
+    LIST_HEADING_DEPTHS,
+    restoreListHeadingDepth,
 } from "./listHeadingTypes";
+import type { ListHeadingDepth, ListHeadingItem } from "./listHeadingTypes";
 import { ROAM_LIST_HEADING_VIEW_TYPE } from "./roamTypes";
 
 const REFRESH_DELAY_MS = 180;
-
-const MODE_OPTIONS: Array<{ mode: ListHeadingMode; label: string }> = [
-    { mode: "headings-only", label: "Headings" },
-    { mode: "top-indent", label: "Top indent" },
-    { mode: "top-two-indent", label: "Two indents" },
-];
 
 type RenderedInline = {
     component: Component;
@@ -29,13 +33,16 @@ type RenderedInline = {
 };
 
 export class RoamListHeadingView extends ItemView {
-    private mode: ListHeadingMode = "headings-only";
+    private depth: ListHeadingDepth = 0;
     private refreshTimer: number | null = null;
     private renderedInline = new Map<string, RenderedInline>();
     private inlineRenderToken = 0;
     private lastMainFilePath: string | null = null;
     private refreshRevision = 0;
     private lastRenderSignature = "";
+    private collapsedItems = new Set<string>();
+    private foldSourcePath: string | null = null;
+    private foldItemKeys: string[] = [];
 
     constructor(
         leaf: WorkspaceLeaf,
@@ -60,13 +67,17 @@ export class RoamListHeadingView extends ItemView {
         this.contentEl.addClass("roam-list-heading-view");
         this.registerEvent(
             this.app.workspace.on("active-leaf-change", (leaf) => {
-                this.trackUserMarkdownFile(leaf);
+                this.trackUserMarkdownView(
+                    leaf?.view instanceof MarkdownView ? leaf.view : null
+                );
                 this.requestRefresh();
             })
         );
         this.registerEvent(
             this.app.workspace.on("file-open", () => {
-                this.trackUserMarkdownFile(this.app.workspace.activeLeaf);
+                this.trackUserMarkdownView(
+                    this.getActiveMarkdownView()
+                );
                 this.requestRefresh();
             })
         );
@@ -97,7 +108,9 @@ export class RoamListHeadingView extends ItemView {
                 }
             })
         );
-        this.trackUserMarkdownFile(this.app.workspace.activeLeaf);
+        this.trackUserMarkdownView(
+            this.getActiveMarkdownView()
+        );
         void this.refresh();
     }
 
@@ -108,31 +121,39 @@ export class RoamListHeadingView extends ItemView {
 
     getState(): Record<string, unknown> {
         return {
-            mode: this.mode,
+            depth: this.depth,
         };
     }
 
     async setState(state: unknown): Promise<void> {
-        if (isRecord(state) && isListHeadingMode(state.mode)) {
-            this.mode = state.mode;
-        }
+        this.depth = restoreListHeadingDepth(state);
         await this.refresh();
     }
 
-    setModeForAudit(mode: ListHeadingMode): void {
+    setDepthForAudit(depth: ListHeadingDepth): void {
         this.clearRefreshTimer();
-        this.mode = mode;
+        this.depth = depth;
+    }
+
+    getDepthControlForAudit(): HTMLInputElement | null {
+        return this.contentEl.querySelector<HTMLInputElement>(
+            ".roam-list-heading-depth-input"
+        );
     }
 
     async getAuditSnapshotForFile(file: TFile): Promise<Record<string, unknown>> {
-        const mode = this.mode;
+        const depth = this.depth;
         const content = await this.readCurrentFileText(file);
-        const items = collectListHeadingItems(content, mode);
+        const items = collectListHeadingItems(content, depth);
+        const summary = summarizeListHeadingDepths(content);
         await this.refresh();
+        const depthInput = this.getDepthControlForAudit();
         return {
-            mode,
+            depth,
             filePath: file.path,
             itemCount: items.length,
+            availableDepth: summary.availableDepth,
+            cumulativeBlockCounts: summary.cumulativeBlockCounts,
             kinds: items.map((item) => item.kind),
             titles: items.map((item) => item.title),
             targets: items.map((item) => ({
@@ -144,9 +165,18 @@ export class RoamListHeadingView extends ItemView {
             })),
             dom: {
                 itemCount: this.contentEl.querySelectorAll(".roam-list-heading-item").length,
-                modeButtonCount: this.contentEl.querySelectorAll(
-                    ".roam-list-heading-mode-button"
+                depthControlCount: this.contentEl.querySelectorAll(
+                    ".roam-list-heading-depth-control"
                 ).length,
+                depthInputCount: this.contentEl.querySelectorAll(
+                    ".roam-list-heading-depth-input"
+                ).length,
+                depthTickCount: this.contentEl.querySelectorAll(
+                    ".roam-list-heading-depth-tick"
+                ).length,
+                depthValue: depthInput?.value ?? null,
+                depthAriaValueText:
+                    depthInput?.getAttribute("aria-valuetext") ?? null,
             },
         };
     }
@@ -175,10 +205,22 @@ export class RoamListHeadingView extends ItemView {
         }
         if (revision !== this.refreshRevision) return;
 
-        const items = content === null ? [] : collectListHeadingItems(content, this.mode);
-        const signature = buildRenderSignature(file, this.mode, items, readFailed);
+        const items = content === null ? [] : collectListHeadingItems(content, this.depth);
+        const depthSummary = summarizeListHeadingDepths(content ?? "");
+        const signature = buildRenderSignature(file, this.depth, items, readFailed);
         if (signature === this.lastRenderSignature) return;
         this.lastRenderSignature = signature;
+        if (this.foldSourcePath !== (file?.path ?? null)) {
+            this.collapsedItems.clear();
+            this.foldItemKeys = [];
+            this.foldSourcePath = file?.path ?? null;
+        }
+        const allItems = parseListHeadingItems(content ?? "");
+        const allKeys = getListHeadingItemKeys(allItems);
+        this.collapsedItems = reconcileListHeadingCollapsedKeys(
+            this.foldItemKeys, allKeys, this.collapsedItems
+        );
+        this.foldItemKeys = allKeys;
 
         const container = this.contentEl;
         this.unloadRenderedInline();
@@ -190,7 +232,7 @@ export class RoamListHeadingView extends ItemView {
         titleRow.createDiv({ cls: "roam-list-heading-title", text: "List heading" });
         this.renderIconButton(titleRow, "refresh-cw", "Refresh", () => this.requestRefresh());
 
-        this.renderModeSwitch(header);
+        this.renderDepthControl(header, depthSummary);
 
         if (!(file instanceof TFile) || file.extension !== "md") {
             this.renderEmpty(container, "Open a Markdown file to show its outline.");
@@ -210,43 +252,129 @@ export class RoamListHeadingView extends ItemView {
         }
 
         const list = container.createDiv({ cls: "roam-list-heading-list" });
-        for (const item of items) {
-            this.renderItem(list, file, item);
-        }
+        const descendantEnds = getListHeadingDescendantEnds(items);
+        const keysByOffset = new Map(allItems.map((item, index) => [item.offset, allKeys[index]]));
+        const foldKeys = items.map((item) => keysByOffset.get(item.offset) ?? getItemKey(item));
+        const entries: HTMLElement[] = [];
+        const updateVisibility = () => {
+            let hiddenUntil = 0;
+            items.forEach((item, index) => {
+                const hidden = index < hiddenUntil;
+                entries[index].hidden = hidden;
+                if (!hidden && this.collapsedItems.has(foldKeys[index])) {
+                    hiddenUntil = descendantEnds[index];
+                }
+            });
+        };
+        items.forEach((item, index) => {
+            entries.push(this.renderItem(
+                list,
+                file,
+                item,
+                foldKeys[index],
+                descendantEnds[index] > index + 1,
+                updateVisibility
+            ));
+        });
+        updateVisibility();
     }
 
-    private renderModeSwitch(parent: HTMLElement): void {
-        const switcher = parent.createDiv({
-            cls: "roam-list-heading-mode",
+    private renderDepthControl(
+        parent: HTMLElement,
+        summary: ListHeadingDepthSummary
+    ): void {
+        const control = parent.createDiv({
+            cls: "roam-list-heading-depth-control",
             attr: {
-                role: "group",
-                "aria-label": "List heading mode",
+                "data-depth": String(this.depth),
+                "data-available-depth": String(summary.availableDepth),
             },
         });
-
-        for (const option of MODE_OPTIONS) {
-            const button = switcher.createEl("button", {
-                cls: "roam-list-heading-mode-button",
-                text: option.label,
+        const track = control.createDiv({ cls: "roam-list-heading-depth-track" });
+        track.createDiv({ cls: "roam-list-heading-depth-fill" });
+        const ticks = control.createDiv({ cls: "roam-list-heading-depth-ticks" });
+        for (const depth of LIST_HEADING_DEPTHS) {
+            const tick = ticks.createSpan({
+                cls: "roam-list-heading-depth-tick",
                 attr: {
-                    type: "button",
-                    "aria-pressed": String(option.mode === this.mode),
+                    "aria-hidden": "true",
+                    "data-depth": String(depth),
+                    "data-covered": String(depth <= this.depth),
+                    "data-available": String(depth <= summary.availableDepth),
+                    "data-current": String(depth === this.depth),
                 },
             });
-            button.addEventListener("click", () => {
-                this.mode = option.mode;
-                this.app.workspace.requestSaveLayout();
-                void this.refresh();
+            tick.style.setProperty("--roam-depth-position", String(depth));
+            tick.addEventListener("pointerdown", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.applyDepth(depth, true);
+            });
+            tick.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
             });
         }
+
+        const input = control.createEl("input", {
+            cls: "roam-list-heading-depth-input",
+            attr: {
+                type: "range",
+                min: "0",
+                max: "5",
+                step: "1",
+                value: String(this.depth),
+                "aria-label": "List depth",
+                "aria-valuetext": formatDepthTooltip(this.depth, summary),
+                title: formatDepthTooltip(this.depth, summary),
+                "data-tooltip-position": "top",
+            },
+        });
+        input.addEventListener("input", () => {
+            this.applyDepth(Number(input.value), true);
+        });
+        input.addEventListener("keydown", (event) => {
+            const nextDepth = getKeyboardDepth(this.depth, event.key);
+            if (nextDepth === null) return;
+            event.preventDefault();
+            this.applyDepth(nextDepth, true);
+        });
+        input.addEventListener("pointermove", (event) => {
+            const rect = input.getBoundingClientRect();
+            if (rect.width <= 0) return;
+            const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+            const hoverDepth = Math.round(ratio * 5) as ListHeadingDepth;
+            input.setAttr("title", formatDepthTooltip(hoverDepth, summary));
+        });
+        input.addEventListener("pointerleave", () => {
+            input.setAttr("title", formatDepthTooltip(this.depth, summary));
+        });
+    }
+
+    private applyDepth(value: number, restoreFocus = false): void {
+        if (!isListHeadingDepth(value) || value === this.depth) return;
+        this.depth = value;
+        this.app.workspace.requestSaveLayout();
+        void this.refresh().then(() => {
+            if (!restoreFocus) return;
+            const focusControl = () => {
+                this.getDepthControlForAudit()?.focus({ preventScroll: true });
+            };
+            focusControl();
+            window.requestAnimationFrame(focusControl);
+        });
     }
 
     private renderItem(
         parent: HTMLElement,
         file: TFile,
-        item: ListHeadingItem
-    ): void {
-        const itemEl = parent.createDiv({
+        item: ListHeadingItem,
+        foldKey: string,
+        hasDescendants: boolean,
+        updateVisibility: () => void
+    ): HTMLElement {
+        const entry = parent.createDiv({ cls: "roam-list-heading-entry" });
+        const itemEl = entry.createDiv({
             cls: `roam-list-heading-item roam-list-heading-${item.kind}`,
             attr: {
                 role: "button",
@@ -264,13 +392,30 @@ export class RoamListHeadingView extends ItemView {
         marker.setAttr("aria-hidden", "true");
 
         const textEl = itemEl.createSpan({ cls: "roam-list-heading-text" });
-        const inlineKey = `${item.line}:${item.col}:${item.title}`;
+        const inlineKey = getItemKey(item);
         void this.renderInlineMarkdown(textEl, file, item, inlineKey);
 
-        itemEl.createSpan({
-            cls: "roam-list-heading-line",
-            text: String(item.line + 1),
-        });
+        if (hasDescendants) {
+            const foldButton = entry.createEl("button", {
+                cls: "roam-list-heading-fold",
+                attr: { type: "button", "data-tooltip-position": "left" },
+            });
+            const updateButton = () => {
+                const collapsed = this.collapsedItems.has(foldKey);
+                foldButton.setAttr("aria-expanded", String(!collapsed));
+                foldButton.setAttr("aria-label", `${collapsed ? "Expand" : "Collapse"} children of ${item.title}`);
+                setIcon(foldButton, collapsed ? "chevron-right" : "chevron-down");
+            };
+            updateButton();
+            foldButton.addEventListener("click", (event) => {
+                event.stopPropagation();
+                if (!this.collapsedItems.delete(foldKey)) {
+                    this.collapsedItems.add(foldKey);
+                }
+                updateButton();
+                updateVisibility();
+            });
+        }
 
         itemEl.addEventListener("click", (event) => {
             this.handleItemActivation(event, file, item);
@@ -280,6 +425,7 @@ export class RoamListHeadingView extends ItemView {
             event.preventDefault();
             this.handleItemActivation(event, file, item);
         });
+        return entry;
     }
 
     private handleItemActivation(
@@ -347,7 +493,10 @@ export class RoamListHeadingView extends ItemView {
     private async navigateToItem(file: TFile, item: ListHeadingItem): Promise<void> {
         let leaf = this.app.workspace
             .getLeavesOfType("markdown")
-            .find((candidate) => candidate.view?.file?.path === file.path);
+            .find((candidate) =>
+                candidate.view instanceof MarkdownView &&
+                candidate.view.file?.path === file.path
+            );
 
         if (!leaf) {
             leaf = this.app.workspace.getLeaf(false);
@@ -368,7 +517,7 @@ export class RoamListHeadingView extends ItemView {
     }
 
     private async readCurrentFileText(file: TFile): Promise<string> {
-        const activeView = this.app.workspace.activeLeaf?.view;
+        const activeView = this.getActiveMarkdownView();
         if (
             activeView instanceof MarkdownView &&
             activeView.file instanceof TFile &&
@@ -401,7 +550,7 @@ export class RoamListHeadingView extends ItemView {
             }
         }
 
-        const activeView = this.app.workspace.activeLeaf?.view;
+        const activeView = this.getActiveMarkdownView();
         if (
             activeView instanceof MarkdownView &&
             activeView.file instanceof TFile &&
@@ -428,8 +577,7 @@ export class RoamListHeadingView extends ItemView {
         return null;
     }
 
-    private trackUserMarkdownFile(leaf: WorkspaceLeaf | null): void {
-        const activeView = leaf?.view;
+    private trackUserMarkdownView(activeView: MarkdownView | null): void {
         if (
             activeView instanceof MarkdownView &&
             activeView.file instanceof TFile &&
@@ -439,6 +587,14 @@ export class RoamListHeadingView extends ItemView {
             this.lastMainFilePath = activeView.file.path;
             this.plugin.setOutlineSourcePath(activeView.file.path, false);
         }
+    }
+
+    private getActiveMarkdownView(): MarkdownView | null {
+        const workspace = this.app.workspace as unknown as {
+            getActiveViewOfType(viewType: unknown): unknown;
+        };
+        const activeView = workspace.getActiveViewOfType(MarkdownView);
+        return activeView instanceof MarkdownView ? activeView : null;
     }
 
     private isUserWorkspaceMarkdownView(view: MarkdownView): boolean {
@@ -495,6 +651,10 @@ function getMarker(item: ListHeadingItem): string {
     return "•";
 }
 
+function getItemKey(item: ListHeadingItem): string {
+    return `${item.line}:${item.col}:${item.title}`;
+}
+
 function getVisualIndent(item: ListHeadingItem): number {
     if (item.kind === "indent-block") {
         return Math.max(item.level - 1, 0) * 12;
@@ -502,27 +662,15 @@ function getVisualIndent(item: ListHeadingItem): number {
     return Math.max(item.level - 1, 0) * 10;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
-}
-
-function isListHeadingMode(value: unknown): value is ListHeadingMode {
-    return (
-        value === "headings-only" ||
-        value === "top-indent" ||
-        value === "top-two-indent"
-    );
-}
-
 function buildRenderSignature(
     file: TFile | null,
-    mode: ListHeadingMode,
+    depth: ListHeadingDepth,
     items: ListHeadingItem[],
     readFailed: boolean
 ): string {
     return JSON.stringify({
         path: file?.path ?? null,
-        mode,
+        depth,
         readFailed,
         items: items.map((item) => [
             item.kind,
@@ -533,4 +681,27 @@ function buildRenderSignature(
             item.indentDepth,
         ]),
     });
+}
+
+function formatDepthTooltip(
+    depth: ListHeadingDepth,
+    summary: ListHeadingDepthSummary
+): string {
+    if (depth === 0) return "Headings · 0 blocks";
+    return `List depth ${depth} · ${summary.cumulativeBlockCounts[depth]} blocks`;
+}
+
+function getKeyboardDepth(
+    current: ListHeadingDepth,
+    key: string
+): ListHeadingDepth | null {
+    if (key === "Home") return 0;
+    if (key === "End") return 5;
+    if (key === "ArrowLeft" || key === "ArrowDown") {
+        return Math.max(0, current - 1) as ListHeadingDepth;
+    }
+    if (key === "ArrowRight" || key === "ArrowUp") {
+        return Math.min(5, current + 1) as ListHeadingDepth;
+    }
+    return null;
 }

@@ -6,7 +6,6 @@ import {
     Component,
     EphemeralState,
     HoverPopover,
-    MarkdownEditView,
     OpenViewState,
     parseLinktext,
     PopoverState,
@@ -15,6 +14,8 @@ import {
     TFile,
     View,
     Workspace,
+    WorkspaceContainer,
+    WorkspaceItem,
     WorkspaceLeaf,
     WorkspaceSplit,
     WorkspaceTabs,
@@ -25,7 +26,8 @@ import { genId } from "./utils/utils";
 
 
 export interface DailyNoteEditorParent {
-    hoverPopover: DailyNoteEditor | null;
+    hoverPopover?: DailyNoteEditor | null;
+    DailyNoteEditor?: DailyNoteEditor | null;
     containerEl?: HTMLElement;
     view?: View;
     dom?: HTMLElement;
@@ -39,27 +41,48 @@ export function isDailyNoteLeaf(leaf: WorkspaceLeaf) {
     return leaf.containerEl.matches(".dn-editor.dn-leaf-view .workspace-leaf");
 }
 
-function nosuper<T>(base: new (...args: unknown[]) => T): new () => T {
-    const derived = function () {
-        return Object.setPrototypeOf(new Component, new.target.prototype);
-    };
-    derived.prototype = base.prototype;
-    return Object.setPrototypeOf(derived, base);
+function readProperty(value: unknown, key: string): unknown {
+    if (typeof value !== "object" || value === null) return undefined;
+    return (value as Record<string, unknown>)[key];
 }
 
-export const spawnLeafView = (plugin: DailyNoteViewPlugin, initiatingEl?: HTMLElement, leaf?: WorkspaceLeaf, onShowCallback?: () => unknown): [WorkspaceLeaf, DailyNoteEditor] => {
-    // When Obsidian doesn't set any leaf active, use leaf instead.
-    let parent = plugin.app.workspace.activeLeaf as unknown as DailyNoteEditorParent;
-    if (!parent) parent = leaf as unknown as DailyNoteEditorParent;
+function readChildren(value: unknown): unknown[] {
+    const children = readProperty(value, "children");
+    return Array.isArray(children) ? (children as unknown[]) : [];
+}
 
-    if (!initiatingEl) initiatingEl = parent?.containerEl;
+function floatingContainers(workspace: Workspace): WorkspaceContainer[] {
+    const floatingRoot: unknown = workspace.floatingSplit;
+    return readChildren(floatingRoot).filter(
+        (child): child is WorkspaceContainer => child instanceof WorkspaceContainer
+    );
+}
 
-    const hoverPopover = new DailyNoteEditor(parent, initiatingEl!, plugin, undefined, onShowCallback);
+function hasReinit(value: unknown): value is { reinit(): void } {
+    return typeof readProperty(value, "reinit") === "function";
+}
+
+function nosuper(base: typeof HoverPopover): new () => HoverPopover {
+    // Keep Component initialization without running HoverPopover's native UI constructor.
+    class ComponentHost extends Component {}
+    Object.setPrototypeOf(ComponentHost.prototype, base.prototype);
+    return ComponentHost as new () => HoverPopover;
+}
+
+export const spawnLeafView = (plugin: DailyNoteViewPlugin, initiatingEl?: HTMLElement, leaf?: WorkspaceLeaf, onShowCallback?: () => unknown, options?: {independentFromParent?: boolean}): [WorkspaceLeaf, DailyNoteEditor] => {
+    const parent: DailyNoteEditorParent = leaf ?? plugin.app.workspace.getLeaf(false);
+    const targetEl = initiatingEl ?? parent.containerEl;
+    if (!targetEl) throw new Error("Embedded editor target is unavailable");
+
+    // A Page stream card must not replace another card's popover on the shared view leaf.
+    const editorParent = options?.independentFromParent ? {containerEl: targetEl} : parent;
+    const hoverPopover = new DailyNoteEditor(editorParent, targetEl, plugin, undefined, onShowCallback);
     return [hoverPopover.attachLeaf(), hoverPopover];
 
 };
 
 export class DailyNoteEditor extends nosuper(HoverPopover) {
+    declare parent: DailyNoteEditorParent | null;
     onTarget: boolean;
     setActive: (event: MouseEvent) => void;
 
@@ -68,8 +91,7 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
     detaching = false;
     opening = false;
 
-    // @ts-ignore
-    rootSplit: WorkspaceSplit = new (WorkspaceSplit as ConstructableWorkspaceSplit)(window.app.workspace, "vertical");
+    rootSplit: WorkspaceSplit;
     isPinned = true;
 
     titleEl: HTMLElement;
@@ -78,39 +100,40 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
     // It is currently not useful.
     // leafInHoverEl: WorkspaceLeaf;
 
-    oldPopover = this.parent?.DailyNoteEditor;
+    oldPopover: DailyNoteEditor | null | undefined;
     document: Document;
 
     id = genId(8);
-    bounce?: NodeJS.Timeout;
+    bounce?: number;
     boundOnZoomOut: () => void;
 
     originalPath: string; // these are kept to avoid adopting targets w/a different link
     originalLinkText: string;
     static activePopover?: DailyNoteEditor;
 
-    static activeWindows() {
-        const windows: Window[] = [window];
-        // @ts-ignore
-        const {floatingSplit} = app.workspace;
-        if (floatingSplit) {
-            for (const split of floatingSplit.children) {
-                if (split.win) windows.push(split.win);
-            }
+    static activeWindows(workspace: Workspace) {
+        const mainWindow =
+            workspace.containerEl.ownerDocument.defaultView ?? window;
+        const windows: Window[] = [mainWindow];
+        for (const container of floatingContainers(workspace)) {
+            windows.push(container.win);
         }
         return windows;
     }
 
     static containerForDocument(plugin: DailyNoteViewPlugin, doc: Document) {
-        if (doc !== document && plugin.app.workspace.floatingSplit)
-            for (const container of plugin.app.workspace.floatingSplit.children) {
+        const mainDocument = plugin.app.workspace.containerEl.ownerDocument;
+        if (doc !== mainDocument)
+            for (const container of floatingContainers(plugin.app.workspace)) {
                 if (container.doc === doc) return container;
             }
         return plugin.app.workspace.rootSplit;
     }
 
-    static activePopovers() {
-        return this.activeWindows().flatMap(this.popoversForWindow);
+    static activePopovers(workspace: Workspace) {
+        return this.activeWindows(workspace).flatMap((activeWindow) =>
+            this.popoversForWindow(activeWindow)
+        );
     }
 
     static popoversForWindow(win?: Window) {
@@ -120,13 +143,12 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
     }
 
     static forLeaf(leaf: WorkspaceLeaf | undefined) {
-        // leaf can be null such as when right clicking on an internal link
-        const el = leaf && document.body.matchParent.call(leaf.containerEl, ".dn-leaf-view"); // work around matchParent race condition
+        const el = leaf?.containerEl.closest(".dn-leaf-view");
         return el ? popovers.get(el) : undefined;
     }
 
     static iteratePopoverLeaves(ws: Workspace, cb: (leaf: WorkspaceLeaf) => boolean | void) {
-        for (const popover of this.activePopovers()) {
+        for (const popover of this.activePopovers(ws)) {
             if (popover.rootSplit && ws.iterateLeaves(cb, popover.rootSplit)) return true;
         }
         return false;
@@ -150,10 +172,15 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
         this.onTarget = true;
 
         this.parent = parent;
+        this.oldPopover = parent.DailyNoteEditor;
         this.waitTime = waitTime;
         this.state = PopoverState.Showing;
 
         this.document = this.targetEl?.ownerDocument ?? window.activeDocument ?? window.document;
+        this.rootSplit = new (WorkspaceSplit as ConstructableWorkspaceSplit)(
+            plugin.app.workspace,
+            "vertical"
+        );
         this.hoverEl = this.document.defaultView!.createDiv({
             cls: "dn-editor dn-leaf-view",
             attr: {id: "dn-" + this.id},
@@ -161,8 +188,9 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
         const {hoverEl} = this;
 
         this.abortController!.load();
-        this.timer = window.setTimeout(this.show.bind(this), waitTime);
-        this.setActive = this._setActive.bind(this);
+        const ownerWindow = this.document.defaultView ?? window;
+        this.timer = ownerWindow.setTimeout(() => this.show(), waitTime);
+        this.setActive = (event) => this._setActive(event);
         if (hoverEl) {
             hoverEl.addEventListener("mousedown", this.setActive);
         }
@@ -209,16 +237,17 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
     }
 
     setInitialDimensions() {
-
-        this.hoverEl.style.height = 'auto';
-        this.hoverEl.style.width = "100%";
+        this.hoverEl.setCssProps({
+            height: "auto",
+            width: "100%",
+        });
     }
 
     transition() {
         if (this.shouldShow()) {
             if (this.state === PopoverState.Hiding) {
                 this.state = PopoverState.Shown;
-                window.clearTimeout(this.timer);
+                (this.document.defaultView ?? window).clearTimeout(this.timer);
             }
         } else {
             if (this.state === PopoverState.Showing) {
@@ -226,7 +255,7 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
             } else {
                 if (this.state === PopoverState.Shown) {
                     this.state = PopoverState.Hiding;
-                    this.timer = window.setTimeout(() => {
+                    this.timer = (this.document.defaultView ?? window).setTimeout(() => {
                         if (this.shouldShow()) {
                             this.transition();
                         } else {
@@ -248,7 +277,15 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
     }
 
     attachLeaf(): WorkspaceLeaf {
-        this.rootSplit.getRoot = () => this.plugin.app.workspace[this.document === document ? "rootSplit" : "floatingSplit"]!;
+        const mainDocument = this.plugin.app.workspace.containerEl.ownerDocument;
+        this.rootSplit.getRoot = (): WorkspaceItem => {
+            const workspace = this.plugin.app.workspace;
+            if (this.document === mainDocument) return workspace.rootSplit;
+            const floatingRoot: unknown = workspace.floatingSplit;
+            return floatingRoot instanceof WorkspaceItem
+                ? floatingRoot
+                : workspace.rootSplit;
+        };
         this.rootSplit.getContainer = () => DailyNoteEditor.containerForDocument(this.plugin, this.document);
 
         this.titleEl.insertAdjacentElement("afterend", this.rootSplit.containerEl);
@@ -260,13 +297,15 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
 
     onload(): void {
         super.onload();
-        this.registerEvent(this.plugin.app.workspace.on("layout-change", this.updateLeaves, this));
+        this.registerEvent(this.plugin.app.workspace.on("layout-change", () => this.updateLeaves()));
         this.registerEvent(this.plugin.app.workspace.on("layout-change", () => {
             // Ensure that top-level items in a popover are not tabbed
-            // @ts-ignore
-            this.rootSplit.children.forEach((item: any, index: any) => {
+            readChildren(this.rootSplit).forEach((item, index) => {
                 if (item instanceof WorkspaceTabs) {
-                    this.rootSplit.replaceChild(index, (item as any).children[0]);
+                    const firstChild = readChildren(item)[0];
+                    if (firstChild instanceof WorkspaceItem) {
+                        this.rootSplit.replaceChild(index, firstChild);
+                    }
                 }
             });
         }));
@@ -275,7 +314,10 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
     onShow() {
         // Once we've been open for closeDelay, use the closeDelay as a hiding timeout
         const closeDelay = 600;
-        setTimeout(() => (this.waitTime = closeDelay), closeDelay);
+        this.document.defaultView?.setTimeout(
+            () => (this.waitTime = closeDelay),
+            closeDelay
+        );
 
         this.oldPopover?.hide();
         this.oldPopover = null;
@@ -323,7 +365,7 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
     }
 
     shouldShowChild(): boolean {
-        return DailyNoteEditor.activePopovers().some(popover => {
+        return DailyNoteEditor.activePopovers(this.plugin.app.workspace).some(popover => {
             if (popover !== this && popover.targetEl && this.hoverEl.contains(popover.targetEl)) {
                 return popover.shouldShow();
             }
@@ -365,8 +407,13 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
         // an interactjs reflow will be triggered to constrain the image to the viewport if it's
         // too large
         if (this.hoverEl.dataset.imgHeight && this.hoverEl.dataset.imgWidth) {
-            this.hoverEl.style.height = parseFloat(this.hoverEl.dataset.imgHeight) + this.titleEl.offsetHeight + "px";
-            this.hoverEl.style.width = parseFloat(this.hoverEl.dataset.imgWidth) + "px";
+            this.hoverEl.setCssProps({
+                height:
+                    parseFloat(this.hoverEl.dataset.imgHeight) +
+                    this.titleEl.offsetHeight +
+                    "px",
+                width: parseFloat(this.hoverEl.dataset.imgWidth) + "px",
+            });
         }
     }
 
@@ -388,7 +435,7 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
         // A timer might be pending to call show() for the first time, make sure
         // it doesn't bring us back up after we close
         if (this.timer) {
-            window.clearTimeout(this.timer);
+            (this.document.defaultView ?? window).clearTimeout(this.timer);
             this.timer = 0;
         }
 
@@ -467,10 +514,9 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
         // console.log(leaf);
         if (leafViewType === "image") {
             // TODO: temporary workaround to prevent image popover from disappearing immediately when using live preview
-            if (
-                this.parent?.hasOwnProperty("editorEl") &&
-                (this.parent as unknown as MarkdownEditView).editorEl!.hasClass("is-live-preview")
-            ) {
+            const editorEl = readProperty(this.parent, "editorEl");
+            const HTMLElementCtor = this.document.defaultView?.HTMLElement ?? HTMLElement;
+            if (editorEl instanceof HTMLElementCtor && editorEl.hasClass("is-live-preview")) {
                 this.waitTime = 3000;
             }
             const img = leaf!.view.contentEl.querySelector("img")!;
@@ -478,13 +524,16 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
             this.hoverEl.dataset.imgWidth = String(img.naturalWidth);
             this.hoverEl.dataset.imgRatio = String(img.naturalWidth / img.naturalHeight);
         } else if (leafViewType === "pdf") {
-            this.hoverEl.style.height = "800px";
-            this.hoverEl.style.width = "600px";
+            this.hoverEl.setCssProps({
+                height: "800px",
+                width: "600px",
+            });
         }
         if (state.state?.mode === "source") {
             this.whenShown(() => {
                 // Not sure why this is needed, but without it we get issue #186
-                if (requireApiVersion("1.0")) (leaf?.view as any)?.editMode?.reinit?.();
+                const editMode = readProperty(leaf?.view, "editMode");
+                if (requireApiVersion("1.0") && hasReinit(editMode)) editMode.reinit();
                 leaf?.view?.setEphemeralState(state.eState);
             });
         }

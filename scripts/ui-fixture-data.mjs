@@ -1,15 +1,12 @@
-import path from "node:path";
+import {
+    resolveTestVaultPath,
+    resolveTestVaultRoot,
+} from "./test-vault-root.mjs";
 
-export const vaultRoot =
-    process.env.ROAM_IN_OB_VAULT_ROOT;
-if (!vaultRoot) {
-    throw new Error("Set ROAM_IN_OB_VAULT_ROOT to the test vault path.");
-}
+export const vaultRoot = resolveTestVaultRoot();
 
-export const fixtureDir = path.join(
-    vaultRoot,
-    "Journal",
-    "_journal_stream_regression_fixture"
+export const fixtureDir = resolveTestVaultPath(
+    "Journal/_journal_stream_regression_fixture"
 );
 
 export const fixtureFiles = [

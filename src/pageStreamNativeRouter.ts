@@ -1,23 +1,15 @@
-import {
-    Keymap,
-    OpenViewState,
-    PaneType,
-    TFile,
-    Workspace,
-    WorkspaceLeaf,
-} from "obsidian";
-import { around } from "monkey-around";
+import { MarkdownView, Notice, TFile } from "obsidian";
 import type DailyNoteViewPlugin from "./dailyNoteViewIndex";
 import {
     findInternalLinkElement,
     readLinktextFromElement,
     resolveInternalLinkTarget,
 } from "./pageTargetResolver";
-import {
-    NativeRouteState,
-    PAGE_STREAM_NATIVE_ROUTE_TTL_MS,
-    shouldRouteSplitToPageStream,
-} from "./pageStreamRoutePolicy";
+
+const FILE_ROW_SELECTOR =
+    ".nav-file-title[data-path], .search-result-file-title[data-path], " +
+    ".bookmark-item[data-path], .tree-item-self[data-path]";
+const SOURCE_CARD_SELECTOR = ".roam-page-card[data-path], .journal-v2__card[data-path]";
 
 export function isPlainShiftClick(event: MouseEvent): boolean {
     return (
@@ -30,219 +22,158 @@ export function isPlainShiftClick(event: MouseEvent): boolean {
 }
 
 export class PageStreamNativeRouter {
-    private routeState: NativeRouteState | null = null;
-    private fallbackTimer: number | null = null;
+    private clickGeneration = 0;
+    private disposed = false;
 
     constructor(private readonly plugin: DailyNoteViewPlugin) {}
 
     install(): void {
         this.plugin.registerDomEvent(
-            document,
+            window,
             "click",
             (event) => this.recordTrigger(event),
             { capture: true }
         );
-
-        this.patchKeymap();
-        this.patchOpenLinkText();
-        this.patchOpenFile();
-        this.plugin.register(() => this.clearFallbackTimer());
+        this.plugin.register(() => {
+            this.disposed = true;
+            this.clickGeneration++;
+        });
     }
 
     private recordTrigger(event: MouseEvent): void {
+        if (this.disposed) return;
+        const generation = ++this.clickGeneration;
         if (event.defaultPrevented || !isPlainShiftClick(event)) return;
-        const sourceFile = this.plugin.app.workspace.getActiveFile();
+
         const linkEl = findInternalLinkElement(event.target);
-        const fallbackLinktext = linkEl
-            ? readLinktextFromElement(linkEl) ?? undefined
-            : undefined;
-        if (fallbackLinktext) {
-            const resolved = resolveInternalLinkTarget(
-                this.plugin.app,
-                fallbackLinktext,
-                sourceFile?.path ?? ""
-            );
-            if (resolved?.file instanceof TFile) {
-                event.preventDefault();
-                event.stopPropagation();
-                this.clearRoute();
-                void this.plugin.pushFileToPageStream(resolved.file, "link", resolved, {
-                    active: false,
-                    reveal: true,
-                });
+        if (linkEl) {
+            let linktext: string | null;
+            try {
+                linktext = readLinktextFromElement(linkEl);
+            } catch {
                 return;
             }
+            if (!linktext) return;
+
+            const sourcePath = this.sourcePathForTarget(linkEl);
+            if (!sourcePath) return;
+            let target: ReturnType<typeof resolveInternalLinkTarget>;
+            try {
+                target = resolveInternalLinkTarget(this.plugin.app, linktext, sourcePath);
+            } catch {
+                return;
+            }
+            if (!(target?.file instanceof TFile) || target.file.extension !== "md") return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            void this.pushLinkWithNativeFallback(
+                target.file, target, linktext, sourcePath, generation
+            );
+            return;
         }
-        this.routeState = {
-            triggeredAt: Date.now(),
-            sourcePath: sourceFile?.path ?? "",
-            fallbackLinktext,
-        };
-        this.scheduleDomFallback(this.routeState);
+
+        const clickedElement = event.target instanceof HTMLElement
+            ? event.target : null;
+        const fileRow = clickedElement
+            ? clickedElement.closest<HTMLElement>(FILE_ROW_SELECTOR)
+            : null;
+        const control = clickedElement?.closest<HTMLElement>(
+            "button, input, textarea, select, [role='button'], [contenteditable='true'], a[href]"
+        );
+        if (fileRow && control && control !== fileRow && fileRow.contains(control)) {
+            return;
+        }
+        const rowSubpath = fileRow?.getAttribute("data-subpath") ??
+            fileRow?.getAttribute("data-line");
+        if (rowSubpath || fileRow?.getAttribute("data-href")?.includes("#")) return;
+        const path = fileRow?.getAttribute("data-path");
+        if (!path) return;
+        const file = this.plugin.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        void this.pushFileRowWithNativeFallback(file, generation);
     }
 
-    private patchKeymap(): void {
-        const plugin = this.plugin;
-        const isFreshRoute = () => this.isFreshRoute();
-        const uninstaller = around(Keymap, {
-            isModEvent(next) {
-                return function (event?: unknown): PaneType | boolean {
-                    if (
-                        event instanceof MouseEvent &&
-                        isPlainShiftClick(event) &&
-                        isFreshRoute()
-                    ) {
-                        return "split";
-                    }
-                    return next.call(this, event);
-                };
-            },
-            isModifier(next) {
-                return function (event: unknown, modifier: unknown): boolean {
-                    if (
-                        modifier === "Mod" &&
-                        event instanceof MouseEvent &&
-                        isPlainShiftClick(event) &&
-                        isFreshRoute()
-                    ) {
-                        return true;
-                    }
-                    return next.call(this, event, modifier);
-                };
-            },
+    private sourcePathForTarget(target: HTMLElement): string | null {
+        let sourcePath: string | null = null;
+        this.plugin.app.workspace.iterateAllLeaves((leaf) => {
+            if (sourcePath !== null || !(leaf.view instanceof MarkdownView)) return;
+            if (leaf.view.file && leaf.view.containerEl.contains(target)) {
+                sourcePath = leaf.view.file.path;
+            }
         });
-        plugin.register(uninstaller);
+        if (sourcePath) return sourcePath;
+
+        const cardPath = target.closest<HTMLElement>(SOURCE_CARD_SELECTOR)
+            ?.getAttribute("data-path");
+        if (!cardPath) return null;
+        const cardFile = this.plugin.app.vault.getAbstractFileByPath(cardPath);
+        return cardFile instanceof TFile && cardFile.extension === "md"
+            ? cardFile.path
+            : null;
     }
 
-    private patchOpenLinkText(): void {
-        const plugin = this.plugin;
-        const routeOpenLinkText = this.routeOpenLinkText.bind(this);
-        const uninstaller = around(Workspace.prototype, {
-            openLinkText(next) {
-                return async function (
-                    linktext: string,
-                    sourcePath: string,
-                    newLeaf?: PaneType | boolean,
-                    openViewState?: OpenViewState
-                ): Promise<void> {
-                    const routed = await routeOpenLinkText(
-                        linktext,
-                        sourcePath,
-                        newLeaf
-                    );
-                    if (routed) return;
-
-                    return next.call(
-                        this,
-                        linktext,
-                        sourcePath,
-                        newLeaf,
-                        openViewState
-                    );
-                };
-            },
-        });
-        plugin.register(uninstaller);
-    }
-
-    private patchOpenFile(): void {
-        const plugin = this.plugin;
-        const routeOpenFile = this.routeOpenFile.bind(this);
-        const uninstaller = around(WorkspaceLeaf.prototype, {
-            openFile(next) {
-                return async function (
-                    file: TFile,
-                    openState?: OpenViewState
-                ): Promise<void> {
-                    const routed = await routeOpenFile(file);
-                    if (routed) return;
-
-                    return next.call(this, file, openState);
-                };
-            },
-        });
-        plugin.register(uninstaller);
-    }
-
-    private async routeOpenLinkText(
+    private async pushLinkWithNativeFallback(
+        file: TFile,
+        target: NonNullable<ReturnType<typeof resolveInternalLinkTarget>>,
         linktext: string,
         sourcePath: string,
-        newLeaf?: PaneType | boolean
-    ): Promise<boolean> {
-        if (
-            !shouldRouteSplitToPageStream(this.routeState, Date.now(), newLeaf)
-        ) {
-            return false;
-        }
-
-        const resolved = resolveInternalLinkTarget(
-            this.plugin.app,
-            linktext,
-            sourcePath || this.routeState?.sourcePath || ""
-        );
-        this.clearRoute();
-        if (resolved?.file instanceof TFile) {
-            await this.plugin.pushFileToPageStream(resolved.file, "link", resolved, {
+        generation: number
+    ): Promise<void> {
+        let pushed = false;
+        try {
+            pushed = await this.plugin.pushFileToPageStream(file, "link", target, {
                 active: false,
                 reveal: true,
             });
-            return true;
+        } catch (error) {
+            console.error("Could not route link to Page Stream:", error);
         }
-        return false;
-    }
-
-    private async routeOpenFile(file: TFile): Promise<boolean> {
-        if (!this.isFreshRoute() || !(file instanceof TFile) || file.extension !== "md") {
-            return false;
+        if (pushed || this.disposed) return;
+        if (!this.isCurrent(generation)) {
+            new Notice("Could not open the earlier linked note. Try again.");
+            return;
         }
 
-        this.clearRoute();
-        await this.plugin.pushFileToPageStream(file, "navigation", undefined, {
-            active: false,
-            reveal: true,
-        });
-        return true;
-    }
-
-    private scheduleDomFallback(state: NativeRouteState): void {
-        this.clearFallbackTimer();
-        if (!state.fallbackLinktext) return;
-        this.fallbackTimer = window.setTimeout(() => {
-            this.fallbackTimer = null;
-            if (this.routeState !== state || !this.isFreshRoute()) return;
-            const resolved = resolveInternalLinkTarget(
-                this.plugin.app,
-                state.fallbackLinktext ?? "",
-                state.sourcePath
-            );
-            this.clearRoute();
-            if (resolved?.file instanceof TFile) {
-                void this.plugin.pushFileToPageStream(resolved.file, "link", resolved, {
-                    active: false,
-                    reveal: true,
-                });
-            }
-        }, 120);
-    }
-
-    private isFreshRoute(): boolean {
-        return (
-            !!this.routeState &&
-            Date.now() - this.routeState.triggeredAt >= 0 &&
-            Date.now() - this.routeState.triggeredAt <=
-                PAGE_STREAM_NATIVE_ROUTE_TTL_MS
-        );
-    }
-
-    private clearRoute(): void {
-        this.routeState = null;
-        this.clearFallbackTimer();
-    }
-
-    private clearFallbackTimer(): void {
-        if (this.fallbackTimer !== null) {
-            window.clearTimeout(this.fallbackTimer);
-            this.fallbackTimer = null;
+        try {
+            await this.plugin.app.workspace.openLinkText(linktext, sourcePath, "split");
+        } catch (error) {
+            console.error("Could not open routed link natively:", error);
+            new Notice("Could not open the linked note.");
         }
+    }
+
+    private async pushFileRowWithNativeFallback(
+        file: TFile,
+        generation: number
+    ): Promise<void> {
+        let pushed = false;
+        try {
+            pushed = await this.plugin.pushFileToPageStream(file, "navigation", undefined, {
+                active: false,
+                reveal: true,
+            });
+        } catch (error) {
+            console.error("Could not route file to Page Stream:", error);
+        }
+        if (pushed || this.disposed) return;
+        if (!this.isCurrent(generation)) {
+            new Notice("Could not open the earlier file. Try again.");
+            return;
+        }
+
+        try {
+            await this.plugin.app.workspace.getLeaf("split").openFile(file);
+        } catch (error) {
+            console.error("Could not open routed file natively:", error);
+            new Notice("Could not open the linked note.");
+        }
+    }
+
+    private isCurrent(generation: number): boolean {
+        return !this.disposed && generation === this.clickGeneration;
     }
 }

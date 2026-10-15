@@ -1,4 +1,9 @@
-import type { ListHeadingItem, ListHeadingMode } from "./listHeadingTypes";
+import type { ListHeadingDepth, ListHeadingItem } from "./listHeadingTypes";
+
+export type ListHeadingDepthSummary = {
+    availableDepth: ListHeadingDepth;
+    cumulativeBlockCounts: [number, number, number, number, number, number];
+};
 
 const MARKDOWN_HEADING_RE = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
 const LIST_HEADING_RE =
@@ -16,19 +21,111 @@ type ParserState = {
 
 export function collectListHeadingItems(
     text: string,
-    mode: ListHeadingMode = "headings-only"
+    depth: ListHeadingDepth = 0
 ): ListHeadingItem[] {
     const rawItems = parseListHeadingItems(text);
-    if (mode === "headings-only") {
+    if (depth === 0) {
         return rawItems.filter((item) => item.kind !== "indent-block");
     }
 
-    const visibleDepths = getVisibleIndentDepths(rawItems, mode);
+    const visibleDepths = getVisibleIndentDepths(rawItems, depth);
     return rawItems.filter(
         (item) =>
             item.kind !== "indent-block" ||
             visibleDepths.has(item.indentDepth ?? Number.POSITIVE_INFINITY)
     );
+}
+
+export function summarizeListHeadingDepths(text: string): ListHeadingDepthSummary {
+    const items = parseListHeadingItems(text);
+    const indentBlocks = items.filter(
+        (item) =>
+            item.kind === "indent-block" &&
+            typeof item.indentDepth === "number"
+    );
+    const depths = getSortedIndentDepths(indentBlocks);
+    const availableDepth = Math.min(depths.length, 5) as ListHeadingDepth;
+    const counts = [0, 0, 0, 0, 0, 0] as ListHeadingDepthSummary["cumulativeBlockCounts"];
+    for (let depth = 1; depth <= 5; depth++) {
+        const visibleDepths = new Set(depths.slice(0, depth));
+        counts[depth] = indentBlocks.filter((item) =>
+            visibleDepths.has(item.indentDepth as number)
+        ).length;
+    }
+    return { availableDepth, cumulativeBlockCounts: counts };
+}
+
+export function getListHeadingDescendantEnds(items: ListHeadingItem[]): number[] {
+    // A new heading ends list ancestry even when its heading level is deeper.
+    const ends = items.map(() => items.length);
+    const ancestors: number[] = [];
+    for (let index = 0; index < items.length; index++) {
+        while (
+            ancestors.length &&
+            (items[ancestors[ancestors.length - 1]].level >= items[index].level ||
+                (items[index].kind !== "indent-block" &&
+                    items[ancestors[ancestors.length - 1]].kind === "indent-block"))
+        ) {
+            ends[ancestors.pop() as number] = index;
+        }
+        ancestors.push(index);
+    }
+    return ends;
+}
+
+export function getListHeadingItemKeys(items: ListHeadingItem[]): string[] {
+    const ends = getListHeadingDescendantEnds(items);
+    const keys: string[] = [];
+    const paths: string[][] = [];
+    const ancestors: number[] = [];
+    const occurrences = new Map<string, number>();
+    items.forEach((item, index) => {
+        while (ancestors.length && ends[ancestors[ancestors.length - 1]] <= index) {
+            ancestors.pop();
+        }
+        const parent = ancestors.length ? paths[ancestors[ancestors.length - 1]] : [];
+        const identity = JSON.stringify([parent, item.kind, item.level, item.indentDepth, item.title]);
+        const occurrence = occurrences.get(identity) ?? 0;
+        occurrences.set(identity, occurrence + 1);
+        const path = [...parent, JSON.stringify([item.kind, item.level, item.indentDepth, item.title, occurrence])];
+        paths.push(path);
+        keys.push(JSON.stringify(path));
+        ancestors.push(index);
+    });
+    return keys;
+}
+
+export function reconcileListHeadingCollapsedKeys(
+    previousKeys: string[],
+    currentKeys: string[],
+    collapsed: ReadonlySet<string>
+): Set<string> {
+    const paths = (keys: string[]) => keys.map((key) => JSON.parse(key) as string[]);
+    const group = (path: string[]) => JSON.stringify([
+        ...path.slice(0, -1),
+        (JSON.parse(path[path.length - 1]) as unknown[]).slice(0, -1),
+    ]);
+    const counts = (keys: string[]) => {
+        const result = new Map<string, number>();
+        paths(keys).forEach((path) => {
+            const identity = group(path);
+            result.set(identity, (result.get(identity) ?? 0) + 1);
+        });
+        return result;
+    };
+    const previousCounts = counts(previousKeys);
+    const currentCounts = counts(currentKeys);
+    return new Set(currentKeys.filter((key) => {
+        if (!collapsed.has(key)) return false;
+        const path = JSON.parse(key) as string[];
+        return path.every((_, index) => {
+            const identity = group(path.slice(0, index + 1));
+            const before = previousCounts.get(identity) ?? 0;
+            const after = currentCounts.get(identity) ?? 0;
+            // A changed duplicate group cannot safely identify the surviving sibling.
+            return Math.max(before, after) <= 1 || before === after;
+        });
+    }));
 }
 
 export function parseListHeadingItems(text: string): ListHeadingItem[] {
@@ -208,9 +305,13 @@ function buildHeadingKey(item: ListHeadingItem): string {
 
 function getVisibleIndentDepths(
     items: ListHeadingItem[],
-    mode: ListHeadingMode
+    depth: ListHeadingDepth
 ): Set<number> {
-    const depths = Array.from(
+    return new Set(getSortedIndentDepths(items).slice(0, depth));
+}
+
+function getSortedIndentDepths(items: ListHeadingItem[]): number[] {
+    return Array.from(
         new Set(
             items
                 .filter(
@@ -221,8 +322,4 @@ function getVisibleIndentDepths(
                 .map((item) => item.indentDepth as number)
         )
     ).sort((a, b) => a - b);
-
-    if (mode === "top-indent") return new Set(depths.slice(0, 1));
-    if (mode === "top-two-indent") return new Set(depths.slice(0, 2));
-    return new Set();
 }

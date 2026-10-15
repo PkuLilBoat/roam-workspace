@@ -1,8 +1,12 @@
-import { DailyNoteSettings } from "../types/settings";
+import { DailyNoteSettings, OutlinerScope } from "../types/settings";
 import { TimeRange } from "../types/time";
 import { DEFAULT_SETTINGS } from "./defaultSettings";
 import { isTimeRange } from "./viewState";
 import { NAVIGATION_VIEW_IDS, NavigationViewId } from "../roamTypes";
+import { restoreNavigationSectionCollapsed } from "../navigation/sectionState";
+import { normalizeRecentFileClassFilter } from "../navigation/recentFileClassFilter";
+import { normalizeFilterValues, restorePropertyFilters } from "../navigation/recentMultiFilter";
+import { restoreRecentTaskBlockRecords } from "../navigation/recentTaskBlocks";
 import { restoreRecentPaths } from "./recentFiles";
 
 interface DailyNoteSettingsLike {
@@ -16,7 +20,16 @@ interface DailyNoteSettingsLike {
     showSourcePath?: unknown;
     enableExportMarkdown?: unknown;
     navigationViews?: unknown;
+    navigationSectionCollapsed?: unknown;
+    recentFileClassFilter?: unknown;
+    recentFileTagsFilter?: unknown;
+    recentFilePropertyFilters?: unknown;
     recentFiles?: unknown;
+    showRecentTasks?: unknown;
+    recentTaskBlocks?: unknown;
+    recentTaskTagsFilter?: unknown;
+    recentTaskPagesFilter?: unknown;
+    outlinerScope?: unknown;
     preset?: unknown;
 }
 
@@ -64,9 +77,32 @@ export function restoreDailyNoteSettings(
             raw.navigationViews,
             defaults.navigationViews
         ),
+        navigationSectionCollapsed: restoreNavigationSectionCollapsed(
+            raw.navigationSectionCollapsed,
+            defaults.navigationSectionCollapsed
+        ),
+        recentFileClassFilter: normalizeRecentFileClassFilter(
+            raw.recentFileClassFilter
+        ),
+        recentFileTagsFilter: normalizeFilterValues(raw.recentFileTagsFilter),
+        recentFilePropertyFilters: restorePropertyFilters(raw.recentFilePropertyFilters),
         recentFiles: restoreRecentPaths(raw.recentFiles),
+        showRecentTasks: booleanOrDefault(
+            raw.showRecentTasks,
+            defaults.showRecentTasks
+        ),
+        recentTaskBlocks: restoreRecentTaskBlockRecords(raw.recentTaskBlocks),
+        recentTaskTagsFilter: normalizeFilterValues(raw.recentTaskTagsFilter),
+        recentTaskPagesFilter: normalizeFilterValues(raw.recentTaskPagesFilter),
+        outlinerScope: isOutlinerScope(raw.outlinerScope)
+            ? raw.outlinerScope
+            : defaults.outlinerScope,
         preset: restorePresetList(raw.preset),
     };
+}
+
+function isOutlinerScope(value: unknown): value is OutlinerScope {
+    return value === "off" || value === "stream-only" || value === "vault-wide";
 }
 
 function restoreNavigationViews(

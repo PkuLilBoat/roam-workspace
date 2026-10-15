@@ -1,5 +1,5 @@
 import DailyNoteViewPlugin from "./dailyNoteViewIndex";
-import { App, debounce, PluginSettingTab, Setting, Modal } from "obsidian";
+import { App, debounce, PluginSettingTab, Setting, Modal, Notice } from "obsidian";
 import { DailyNoteSettings } from "./types/settings";
 import { TimeRange } from "./types/time";
 import { DEFAULT_SETTINGS } from "./utils/defaultSettings";
@@ -11,6 +11,8 @@ export { DEFAULT_SETTINGS };
 
 export class DailyNoteSettingTab extends PluginSettingTab {
     plugin: DailyNoteViewPlugin;
+    private displayGeneration = 0;
+    private settingsLoad: Promise<void> | null = null;
 
     constructor(app: App, plugin: DailyNoteViewPlugin) {
         super(app, plugin);
@@ -26,8 +28,8 @@ export class DailyNoteSettingTab extends PluginSettingTab {
     );
 
     debounceDisplay = debounce(
-        async () => {
-            await this.display();
+        () => {
+            this.display();
         },
         400,
         true
@@ -38,8 +40,29 @@ export class DailyNoteSettingTab extends PluginSettingTab {
         this.debounceApplySettingsUpdate();
     }
 
-    async display() {
-        await this.plugin.loadSettings();
+    display(): void {
+        const generation = ++this.displayGeneration;
+        void this.renderSettings(generation).catch((error: unknown) => {
+            if (generation !== this.displayGeneration) return;
+            console.error("Failed to display journal settings:", error);
+            new Notice("Failed to display journal settings.");
+        });
+    }
+
+    hide(): void {
+        ++this.displayGeneration;
+        super.hide();
+    }
+
+    private async renderSettings(generation: number): Promise<void> {
+        const pendingLoad = this.settingsLoad ?? this.plugin.loadSettings();
+        this.settingsLoad = pendingLoad;
+        try {
+            await pendingLoad;
+        } finally {
+            if (this.settingsLoad === pendingLoad) this.settingsLoad = null;
+        }
+        if (generation !== this.displayGeneration) return;
 
         const { containerEl } = this;
         const settings = this.plugin.settings;
@@ -49,48 +72,27 @@ export class DailyNoteSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         new Setting(containerEl)
-            .setName("Hide frontmatter")
-            .setDesc("Hide frontmatter in daily notes")
-            .addToggle((toggle) =>
-                toggle
-                    .setValue(settings.hideFrontmatter)
-                    .onChange(async (value) => {
-                        this.plugin.settings.hideFrontmatter = value;
-
-                        document.body.classList.toggle(
-                            "daily-notes-hide-frontmatter",
-                            value
-                        );
-                        this.applySettingsUpdate();
-                    })
-            );
-
-        new Setting(containerEl)
             .setName("Hide backlinks")
             .setDesc("Hide backlinks in daily notes")
             .addToggle((toggle) =>
                 toggle
                     .setValue(settings.hideBacklinks)
-                    .onChange(async (value) => {
+                    .onChange((value) => {
                         this.plugin.settings.hideBacklinks = value;
 
-                        document.body.classList.toggle(
-                            "daily-notes-hide-backlinks",
-                            value
-                        );
                         this.applySettingsUpdate();
                     })
             );
 
         new Setting(containerEl)
-            .setName("Create and open Journal Stream on startup")
+            .setName("Open journal stream on startup")
             .setDesc(
-                "Automatically open the Journal Stream when Obsidian starts"
+                "Automatically open the journal stream when Obsidian starts"
             )
             .addToggle((toggle) =>
                 toggle
                     .setValue(settings.createAndOpenOnStartup)
-                    .onChange(async (value) => {
+                    .onChange((value) => {
                         this.plugin.settings.createAndOpenOnStartup = value;
                         this.applySettingsUpdate();
                     })
@@ -98,7 +100,7 @@ export class DailyNoteSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName("Journal folder")
-            .setDesc("Folder used by the Journal Stream view")
+            .setDesc("Folder used by the journal stream view")
             .addText((text) =>
                 text
                     .setPlaceholder("Journal")
@@ -112,11 +114,11 @@ export class DailyNoteSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName("Default open mode")
-            .setDesc("Open the configured Journal folder or the Daily Notes list")
+            .setDesc("Open the configured journal folder or the daily notes list")
             .addDropdown((dropdown) =>
                 dropdown
                     .addOption("journal-folder", "Journal folder")
-                    .addOption("daily", "Daily Notes")
+                    .addOption("daily", "Daily notes")
                     .setValue(settings.defaultOpenMode)
                     .onChange((value: "journal-folder" | "daily") => {
                         this.plugin.settings.defaultOpenMode = value;
@@ -126,7 +128,7 @@ export class DailyNoteSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName("Initial range")
-            .setDesc("Default date range used when opening the Journal Stream")
+            .setDesc("Default date range used when opening the journal stream")
             .addDropdown((dropdown) =>
                 INITIAL_RANGE_OPTIONS.reduce(
                     (currentDropdown, option) =>
@@ -142,11 +144,11 @@ export class DailyNoteSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName("Enable Markdown export")
-            .setDesc("Show the copy button for exporting the current Journal window")
+            .setDesc("Show the copy button for exporting the current journal view")
             .addToggle((toggle) =>
                 toggle
                     .setValue(settings.enableExportMarkdown)
-                    .onChange(async (value) => {
+                    .onChange((value) => {
                         this.plugin.settings.enableExportMarkdown = value;
                         this.applySettingsUpdate();
                     })
@@ -157,8 +159,32 @@ export class DailyNoteSettingTab extends PluginSettingTab {
             .addToggle((toggle) =>
                 toggle
                     .setValue(settings.useArrowUpOrDownToNavigate)
-                    .onChange(async (value) => {
+                    .onChange((value) => {
                         this.plugin.settings.useArrowUpOrDownToNavigate = value;
+                        this.applySettingsUpdate();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName("Outliner scope")
+            .setDesc(
+                "Enable built-in list editing in stream views only, across the vault, or not at all."
+            )
+            .addDropdown((dropdown) =>
+                dropdown
+                    .addOption("off", "Off")
+                    .addOption("stream-only", "Stream only")
+                    .addOption("vault-wide", "Vault-wide")
+                    .setValue(settings.outlinerScope)
+                    .onChange((value) => {
+                        if (
+                            value !== "off" &&
+                            value !== "stream-only" &&
+                            value !== "vault-wide"
+                        ) {
+                            return;
+                        }
+                        this.plugin.settings.outlinerScope = value;
                         this.applySettingsUpdate();
                     })
             );
@@ -200,6 +226,20 @@ export class DailyNoteSettingTab extends PluginSettingTab {
                 );
         }
 
+        new Setting(containerEl)
+            .setName("Show recent tasks")
+            .setDesc(
+                "Show recently edited unfinished top-level Markdown tasks in roam navigation."
+            )
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(settings.showRecentTasks)
+                    .onChange((value) => {
+                        settings.showRecentTasks = value;
+                        this.applySettingsUpdate();
+                    })
+            );
+
         new Setting(containerEl).setName("Saved presets").setHeading();
 
         const presetContainer = containerEl.createDiv("preset-container");
@@ -207,7 +247,7 @@ export class DailyNoteSettingTab extends PluginSettingTab {
         // Display existing presets
         if (settings.preset.length === 0) {
             presetContainer.createEl("p", {
-                text: "No presets saved yet. Select a folder or tag in Roam In Ob to create a preset.",
+                text: "No presets saved yet. Add a folder or tag preset below.",
                 cls: "no-presets-message",
             });
         } else {
@@ -221,6 +261,8 @@ export class DailyNoteSettingTab extends PluginSettingTab {
                     .setDesc(preset.target)
                     .addButton((button) => {
                         button.setIcon("trash");
+                        button.setTooltip("Remove preset");
+                        button.buttonEl.setAttribute("aria-label", `Remove ${preset.type} preset: ${preset.target}`);
                         button.onClick(() => {
                             settings.preset.splice(index, 1);
                             this.applySettingsUpdate();
@@ -236,7 +278,7 @@ export class DailyNoteSettingTab extends PluginSettingTab {
             .setDesc("Add a new folder or tag preset")
             .addButton((button) => {
                 button
-                    .setButtonText("Add Preset")
+                    .setButtonText("Add preset")
                     .setCta()
                     .onClick(() => {
                         const modal = new AddPresetModal(
@@ -285,7 +327,7 @@ class AddPresetModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
 
-        contentEl.createEl("h2", { text: "Add New Preset" });
+        contentEl.createEl("h2", { text: "Add new preset" });
 
         const form = contentEl.createEl("form");
         form.addEventListener("submit", (e) => {
@@ -299,8 +341,8 @@ class AddPresetModal extends Modal {
 
         const typeSettingInfo = typeSetting.createDiv();
         typeSettingInfo.addClass("setting-item-info");
-        typeSettingInfo.createEl("div", {
-            text: "Preset Type",
+        typeSettingInfo.createDiv({
+            text: "Preset type",
             cls: "setting-item-name",
         });
 
@@ -358,12 +400,12 @@ class AddPresetModal extends Modal {
         const targetSettingInfo = targetSetting.createDiv();
         targetSettingInfo.addClass("setting-item-info");
 
-        targetSettingInfo.createEl("div", {
+        targetSettingInfo.createDiv({
             text: "Target",
             cls: "setting-item-name",
         });
 
-        targetSettingInfo.createEl("div", {
+        targetSettingInfo.createDiv({
             text: "Enter the folder path or tag name",
             cls: "setting-item-description",
         });
@@ -377,6 +419,7 @@ class AddPresetModal extends Modal {
             placeholder: "Enter folder path or tag name",
         });
         this.targetInput.addClass("target-input");
+        this.targetInput.setAttribute("aria-label", "Folder path or tag name");
 
         const footerEl = contentEl.createDiv();
         footerEl.addClass("modal-button-container");

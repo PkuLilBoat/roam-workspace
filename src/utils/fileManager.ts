@@ -36,7 +36,7 @@ export class FileManager {
     private filteredFiles: TFile[] = [];
     private hasFetched: boolean = false;
     private hasCurrentDay: boolean = true;
-    private cacheDailyNotes: Record<string, any> = {};
+    private cacheDailyNotes: Record<string, TFile> = {};
 
     // Make options public so it can be accessed from outside
     public options: FileManagerOptions;
@@ -95,7 +95,7 @@ export class FileManager {
         this.cacheDailyNotes = getAllDailyNotes();
 
         // Convert the object to an array of files
-        const notes = Object.values(this.cacheDailyNotes) as TFile[];
+        const notes = Object.values(this.cacheDailyNotes);
 
         // Sort based on the selected time field
         const { isReverse, baseTimeField } = this.parseTimeField(
@@ -114,7 +114,8 @@ export class FileManager {
             for (const string of Object.keys(this.cacheDailyNotes)
                 .sort()
                 .reverse()) {
-                this.allFiles.push(<TFile>this.cacheDailyNotes[string]);
+                const note = this.cacheDailyNotes[string];
+                if (note instanceof TFile) this.allFiles.push(note);
             }
 
             // Apply additional time-based sorting if needed
@@ -134,7 +135,9 @@ export class FileManager {
             this.options.app.vault.getAbstractFileByPath(this.options.target);
         if (!(targetFolder instanceof TFolder)) return;
 
-        this.allFiles = collectMarkdownFilesFromFolder(targetFolder) as TFile[];
+        this.allFiles = collectMarkdownFilesFromFolder(targetFolder).filter(
+            (file): file is TFile => file instanceof TFile
+        );
 
         // Sort files by the specified time field
         this.allFiles = this.sortFilesByTimeField(
@@ -305,7 +308,6 @@ export class FileManager {
         // Refresh the daily notes cache to ensure we have the latest data
         this.cacheDailyNotes = getAllDailyNotes();
 
-        // @ts-ignore
         const currentDate = moment();
         const currentDailyNote = getDailyNote(
             currentDate,
@@ -336,7 +338,7 @@ export class FileManager {
         }
 
         const currentDate = moment();
-        const currentDailyNote: any = await createDailyNote(currentDate);
+        const currentDailyNote = await createDailyNote(currentDate);
 
         if (currentDailyNote) {
             this.allFiles = this.sortDailyNotes(
@@ -361,7 +363,7 @@ export class FileManager {
     }
 
     private handleDailyNoteCreate(file: TFile): void {
-        const fileDate = getDateFromFile(file as any, "day");
+        const fileDate = getDateFromFile(file, "day");
         if (!fileDate) return;
 
         this.allFiles = this.sortDailyNotes(
@@ -396,7 +398,7 @@ export class FileManager {
     public fileDelete(file: TFile): void {
         if (
             this.options.mode === "daily" &&
-            getDateFromFile(file as any, "day")
+            getDateFromFile(file, "day")
         ) {
             this.filteredFiles = removeFileByPath(this.filteredFiles, file);
             this.allFiles = removeFileByPath(this.allFiles, file);
@@ -472,7 +474,7 @@ export class FileManager {
         if (!isMarkdownFile(file)) return false;
 
         if (this.options.mode === "daily") {
-            return Boolean(getDateFromFile(file as any, "day"));
+            return Boolean(getDateFromFile(file, "day"));
         }
 
         if (!this.options.target) return false;
@@ -504,7 +506,7 @@ export class FileManager {
     }
 
     private updateCurrentDayStatus(file: TFile): void {
-        const fileDate = getDateFromFile(file as any, "day");
+        const fileDate = getDateFromFile(file, "day");
 
         if (fileDate?.isSame(moment(), "day")) {
             this.hasCurrentDay = true;

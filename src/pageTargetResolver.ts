@@ -1,7 +1,6 @@
 import {
     App,
     CachedMetadata,
-    HeadingSubpathResult,
     parseLinktext,
     resolveSubpath,
     TFile,
@@ -62,10 +61,9 @@ export function resolveTargetLineFromCache(
     }
 
     if (result.type === "heading") {
-        const headingResult = result as HeadingSubpathResult;
         return {
-            line: headingResult.current.position.start.line,
-            col: headingResult.current.position.start.col,
+            line: result.current.position.start.line,
+            col: result.current.position.start.col,
             missing: false,
         };
     }
