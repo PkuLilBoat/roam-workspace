@@ -1,3 +1,9 @@
+<img src="assets/community-banner.png" alt="AI时代的学习和创作" width="680">
+
+<table><tr><td width="180"><img src="assets/wechat.jpg" alt="微信交流二维码" width="156"></td><td>扫描二维码，加入终身学习者社群、交流群。<br>一起交流 AI、知识管理与效率工具。</td></tr></table>
+
+---
+
 # Roam Workspace
 
 [English](README.md) | 简体中文
@@ -46,8 +52,6 @@ pnpm run lint
 
 旧仓库记录的 Daily Notes Editor 继承代码根许可尚未解决，本次保留该状态，不把整个项目重新声明为 MIT，也不声称已厘清继承代码分发权限。Outliner 保留其独立 MIT 许可及声明。本次开发快照发布不代表官方目录审核或生产可用性验收。
 
-## 反馈与交流
+## 反馈
 
-欢迎通过 [GitHub Issues](https://github.com/PkuLilBoat/roam-workspace/issues) 反馈。也可以扫描二维码添加我的微信，加入终身学习者群、交流群，一起交流学习、Obsidian、知识管理与效率工具。此入口完全可选，不影响插件使用。
-
-<img src="assets/wechat.jpg" alt="可选的微信交流二维码" width="220">
+欢迎通过 [GitHub Issues](https://github.com/PkuLilBoat/roam-workspace/issues) 反馈问题或建议。

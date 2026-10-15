@@ -1,3 +1,9 @@
+<img src="assets/community-banner.png" alt="Learning and creating in the AI era" width="680">
+
+<table><tr><td width="180"><img src="assets/wechat.jpg" alt="WeChat community QR code" width="156"></td><td>Scan the QR code to join our lifelong learning community and discussion groups.<br>Let's exchange ideas about AI, knowledge management, and productivity tools.</td></tr></table>
+
+---
+
 # Roam Workspace
 
 English | [简体中文](README.zh-CN.md)
@@ -46,8 +52,6 @@ Derived from [Daily Notes Editor](https://github.com/Quorafind/Obsidian-Daily-No
 
 The earlier repository records unresolved root licensing for inherited Daily Notes Editor code. This update preserves that status and does not claim a new blanket MIT license or clear inherited distribution rights. The Outliner module retains its own MIT notice and license. This development publication is not a claim of Community-directory approval or production readiness.
 
-## Feedback and community
+## Feedback
 
-Use [GitHub Issues](https://github.com/PkuLilBoat/roam-workspace/issues) for public feedback. Optionally scan the QR code to add my WeChat and join lifelong-learner and discussion groups about learning, Obsidian, knowledge management, and productivity. Joining is not required to use the plugin.
-
-<img src="assets/wechat.jpg" alt="Optional WeChat contact QR code" width="220">
+Share issues and suggestions through [GitHub Issues](https://github.com/PkuLilBoat/roam-workspace/issues).
