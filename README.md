@@ -1,6 +1,6 @@
 <img src="assets/community-banner.png" alt="Learning and creating in the AI era" width="680">
 
-<table><tr><td width="180"><img src="assets/wechat.jpg" alt="WeChat community QR code" width="156"></td><td>Scan the QR code to join our lifelong learning community and discussion groups.<br>Let's exchange ideas about AI, knowledge management, and productivity tools.</td></tr></table>
+<table><tr><td width="180"><img src="assets/wechat.jpg" alt="WeChat community QR code" width="156"></td><td>Scan the QR code to join our lifelong learning community and discussion groups.<br>Let's exchange ideas about AI, knowledge management, and productivity tools.<br>WeChat Official Account: 湖畔的赛博格 (same name).</td></tr></table>
 
 ---
 
@@ -9,6 +9,18 @@
 English | [简体中文](README.zh-CN.md)
 
 Edit journals, connected pages, and recent activity in one Obsidian workspace. This repository contains the current local integration based on source commit `55818810dae2d28ca065843905a77436051258d8` (2026-10-09), replacing the older Roam In Ob snapshot.
+
+## Screenshots
+
+Journal and Page Stream: keep related pages beside the journal without losing reading and editing context.
+
+![Journal with a related page in Page Stream](assets/screenshots/journal-page-stream.png)
+
+List Heading: navigate the actual hierarchy of a note's nested lists.
+
+![An editable note with List Heading navigation](assets/screenshots/list-heading.png)
+
+Captured in Obsidian 1.14.4 with the GitHub 0.1.0 release and sample notes in an isolated TEST vault.
 
 ## Features
 

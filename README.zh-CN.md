@@ -1,6 +1,6 @@
 <img src="assets/community-banner.png" alt="AI时代的学习和创作" width="680">
 
-<table><tr><td width="180"><img src="assets/wechat.jpg" alt="微信交流二维码" width="156"></td><td>扫描二维码，加入终身学习者社群、交流群。<br>一起交流 AI、知识管理与效率工具。</td></tr></table>
+<table><tr><td width="180"><img src="assets/wechat.jpg" alt="微信交流二维码" width="156"></td><td>扫描二维码，加入终身学习者社群、交流群。<br>一起交流 AI、知识管理与效率工具。<br>公众号同名：湖畔的赛博格</td></tr></table>
 
 ---
 
@@ -9,6 +9,18 @@
 [English](README.md) | 简体中文
 
 把日志、关联页面和近期活动放进同一个 Obsidian 工作区。本仓库已用本地当前集成版更新，源码基线为 `55818810dae2d28ca065843905a77436051258d8`（2026-10-09），替代旧的 Roam In Ob 快照。
+
+## 界面预览
+
+Journal 与 Page Stream：在日记旁打开关联页面，保留阅读和编辑上下文。
+
+![Journal 日记与关联页面流](assets/screenshots/journal-page-stream.png)
+
+List Heading：按笔记中的真实列表层级导航。
+
+![可编辑笔记与层级导航](assets/screenshots/list-heading.png)
+
+截图来自 Obsidian 1.14.4，使用 GitHub 0.1.0 发布版和隔离 TEST 库中的演示笔记。
 
 ## 功能
 
