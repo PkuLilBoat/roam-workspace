@@ -144,7 +144,8 @@ try {
     await openSettings();await until(row);
     await evaluate(`${row}.querySelector('.checkbox-container').click()`);
     await until(`app.plugins.plugins['roam-workspace'].settings.navigationConfiguration.links.find(x=>x.id===${JSON.stringify(manualId)}).hidden===true`);
-    assert.equal(await evaluate(`Boolean(${manual})`),false);
+    // Settings are saved before the navigation view is notified and repainted.
+    await until(`!${manual}`);
     await until(row);await evaluate(`${row}.querySelector('.checkbox-container').click()`);
     await until(manual);
     await evaluate('app.setting.close();null');

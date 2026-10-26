@@ -10,13 +10,16 @@ const manifest = JSON.parse(
 const head = gitText(["rev-parse", "HEAD"]);
 const dirtyStatus = gitText(["status", "--porcelain=v1", "--untracked-files=all"]);
 const sourceStateHash = await hashSourceState();
-const builtAt = new Date().toISOString();
-const buildId = [
-    head.slice(0, 12),
-    builtAt.replaceAll(/[-:.TZ]/g, ""),
-    sourceStateHash.slice(0, 12),
-    randomUUID().slice(0, 8),
-].join("-");
+// Published clean commits must reproduce byte-for-byte for directory review.
+// Dirty development builds retain unique identities for local runtime audits.
+const clean = dirtyStatus.length === 0;
+const builtAt = clean
+    ? new Date(gitText(["show", "-s", "--format=%cI", "HEAD"])).toISOString()
+    : new Date().toISOString();
+const buildId = clean
+    ? [head.slice(0, 12), sourceStateHash.slice(0, 12)].join("-")
+    : [head.slice(0, 12), builtAt.replaceAll(/[-:.TZ]/g, ""),
+        sourceStateHash.slice(0, 12), randomUUID().slice(0, 8)].join("-");
 
 const fingerprint = {
     head,
