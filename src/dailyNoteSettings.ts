@@ -4,7 +4,8 @@ import { DailyNoteSettings } from "./types/settings";
 import { TimeRange } from "./types/time";
 import { DEFAULT_SETTINGS } from "./utils/defaultSettings";
 import { INITIAL_RANGE_OPTIONS } from "./utils/viewState";
-import { NAVIGATION_VIEW_IDS, NavigationViewId } from "./roamTypes";
+import { parseNavigationConfiguration } from "./navigation/configuration";
+import { renderNavigationManager, subscribeNavigationChanges, updateNavigation } from "./navigation/managementUi";
 
 export type { DailyNoteSettings };
 export { DEFAULT_SETTINGS };
@@ -13,6 +14,7 @@ export class DailyNoteSettingTab extends PluginSettingTab {
     plugin: DailyNoteViewPlugin;
     private displayGeneration = 0;
     private settingsLoad: Promise<void> | null = null;
+    private navigationUnsubscribe: (() => void) | null = null;
 
     constructor(app: App, plugin: DailyNoteViewPlugin) {
         super(app, plugin);
@@ -40,9 +42,10 @@ export class DailyNoteSettingTab extends PluginSettingTab {
         this.debounceApplySettingsUpdate();
     }
 
-    display(): void {
+    display(reload = true): void {
+        this.navigationUnsubscribe ??= subscribeNavigationChanges(this.plugin, () => this.display(false));
         const generation = ++this.displayGeneration;
-        void this.renderSettings(generation).catch((error: unknown) => {
+        void this.renderSettings(generation, reload).catch((error: unknown) => {
             if (generation !== this.displayGeneration) return;
             console.error("Failed to display journal settings:", error);
             new Notice("Failed to display journal settings.");
@@ -50,12 +53,14 @@ export class DailyNoteSettingTab extends PluginSettingTab {
     }
 
     hide(): void {
+        this.navigationUnsubscribe?.();
+        this.navigationUnsubscribe = null;
         ++this.displayGeneration;
         super.hide();
     }
 
-    private async renderSettings(generation: number): Promise<void> {
-        const pendingLoad = this.settingsLoad ?? this.plugin.loadSettings();
+    private async renderSettings(generation: number, reload: boolean): Promise<void> {
+        const pendingLoad = this.settingsLoad ?? (reload ? this.plugin.loadSettings() : Promise.resolve());
         this.settingsLoad = pendingLoad;
         try {
             await pendingLoad;
@@ -191,40 +196,39 @@ export class DailyNoteSettingTab extends PluginSettingTab {
 
         new Setting(containerEl).setName("Navigation views").setHeading();
 
-        const navigationViewLabels: Record<NavigationViewId, [string, string]> = {
-            "journal-stream": [
-                "Journal stream",
-                "Show the Journal stream shortcut in Roam navigation.",
-            ],
-            "page-stream": [
-                "Page stream",
-                "Show the right sidebar Page stream shortcut.",
-            ],
-            "list-heading": [
-                "List heading",
-                "Show the current page structure shortcut.",
-            ],
-        };
+        renderNavigationManager(containerEl, this.plugin);
+        const advanced = containerEl.createEl("details", { cls: "roam-navigation-advanced" });
+        advanced.createEl("summary", { text: "Advanced configuration (JSON)" });
+        const configuration = new Setting(advanced)
+            .setName("Navigation configuration")
+            .setDesc("Set a display name, additional journal folders, and links to notes or websites. Names do not rename files. Paste JSON from your AI assistant or edit it here, then apply.")
+            .setClass("roam-navigation-configuration");
+        const example = { journalName: "Journal stream", journals: [{ id: "project", name: "Project journal", folder: "Projects/Example/Journal" }], links: [{ id: "okr", name: "OKR", type: "note", target: "Projects/OKR.md" }, { id: "web", name: "Website", type: "web", target: "https://example.com" }] };
+        const help = advanced.createEl("details", { cls: "roam-navigation-configuration-help" });
+        help.createEl("summary", { text: "Configuration example" });
+        help.createEl("pre").createEl("code", { text: JSON.stringify(example, null, 2) });
+        let draft = JSON.stringify(settings.navigationConfiguration, null, 2);
+        configuration.addTextArea((text) => {
+            text.inputEl.setAttribute("aria-label", "Navigation configuration JSON");
+            text.setValue(draft).onChange((value) => { draft = value; });
+        });
+        configuration.addButton((button) => button
+            .setButtonText("Apply configuration")
+            .onClick(async () => {
+                try {
+                    const parsed: unknown = JSON.parse(draft);
+                    const next = parseNavigationConfiguration(parsed);
+                    await updateNavigation(this.plugin, state => ({ ...state, configuration: next }));
+                    new Notice("Navigation configuration applied.");
+                } catch (error) {
+                    new Notice(`Configuration not applied: ${error instanceof Error ? error.message : "Invalid configuration"}`);
+                }
+            }));
 
-        for (const id of NAVIGATION_VIEW_IDS) {
-            const [name, description] = navigationViewLabels[id];
-            new Setting(containerEl)
-                .setName(name)
-                .setDesc(description)
-                .addToggle((toggle) =>
-                    toggle
-                        .setValue(settings.navigationViews.includes(id))
-                        .onChange((value) => {
-                            const selected = new Set(settings.navigationViews);
-                            if (value) selected.add(id);
-                            else selected.delete(id);
-                            settings.navigationViews = NAVIGATION_VIEW_IDS.filter(
-                                (viewId) => selected.has(viewId)
-                            );
-                            this.applySettingsUpdate();
-                        })
-                );
-        }
+        configuration.addButton(button => button.setButtonText("Copy JSON").onClick(async () => {
+            try { await navigator.clipboard.writeText(JSON.stringify(this.plugin.settings.navigationConfiguration, null, 2)); new Notice("Navigation JSON copied."); }
+            catch { new Notice("Could not copy. Select and copy the JSON text above."); }
+        }));
 
         new Setting(containerEl)
             .setName("Show recent tasks")

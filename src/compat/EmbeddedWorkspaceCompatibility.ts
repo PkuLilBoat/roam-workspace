@@ -1,16 +1,24 @@
 import {
     Constructor,
+    FileView,
     MarkdownView,
     Plugin,
     View,
     Workspace,
     WorkspaceItem,
     WorkspaceLeaf,
+    WorkspaceParent,
 } from "obsidian";
 import { around } from "monkey-around";
 import { isDailyNoteLeaf } from "../leafView";
 
 type ActiveLeafOptions = { focus?: boolean } | boolean;
+
+// The host status bar uses this private lookup rather than getActiveViewOfType.
+// Probe it locally; unsupported hosts keep their native lookup unchanged.
+interface FileViewWorkspace extends Workspace {
+    getActiveFileView?: () => FileView | null;
+}
 
 interface EmbeddedActiveLeaf {
     child: WorkspaceLeaf;
@@ -20,6 +28,7 @@ interface EmbeddedActiveLeaf {
 /** Owns the remaining global patches needed by synthetic embedded leaves. */
 export function installEmbeddedWorkspaceCompatibility(plugin: Plugin): void {
     let activeEmbedded: EmbeddedActiveLeaf | null = null;
+    const mountingParents = new Set<WorkspaceParent>();
     const forgetEmbedded = () => {
         const embeddedView: unknown = activeEmbedded?.child.view;
         if (activeEmbedded && plugin.app.workspace.activeEditor === embeddedView) {
@@ -30,6 +39,26 @@ export function installEmbeddedWorkspaceCompatibility(plugin: Plugin): void {
     plugin.register(forgetEmbedded);
 
     const workspaceUninstall = around(Workspace.prototype, {
+        createLeafInParent(next: Workspace["createLeafInParent"]) {
+            return function (this: Workspace, parent: WorkspaceParent, index: number): WorkspaceLeaf {
+                const createLeaf = (): WorkspaceLeaf => {
+                    const leaf: unknown = next.call(this, parent, index);
+                    if (!(leaf instanceof WorkspaceLeaf)) throw new Error("Native leaf creation failed");
+                    return leaf;
+                };
+                if (!parent.containerEl.closest(".dn-editor.dn-leaf-view")) {
+                    return createLeaf();
+                }
+                // Native creation activates an empty leaf before its embedded
+                // owner is assigned. Background mounts must stay passive.
+                mountingParents.add(parent);
+                try {
+                    return createLeaf();
+                } finally {
+                    mountingParents.delete(parent);
+                }
+            };
+        },
         getActiveViewOfType(next: Workspace["getActiveViewOfType"]) {
             return function <T extends View>(
                 this: Workspace,
@@ -57,6 +86,8 @@ export function installEmbeddedWorkspaceCompatibility(plugin: Plugin): void {
                 options?: ActiveLeafOptions,
                 focus?: boolean
             ): void {
+                const mountingParent: unknown = leaf.parent;
+                if (Array.from(mountingParents).some(parent => parent === mountingParent)) return;
                 const parent = leaf.parentLeaf;
                 if (parent instanceof WorkspaceLeaf && isDailyNoteLeaf(leaf)) {
                     if (typeof options === "boolean") {
@@ -73,16 +104,47 @@ export function installEmbeddedWorkspaceCompatibility(plugin: Plugin): void {
                     return;
                 }
 
-                forgetEmbedded();
+                // Native focus bubbles from the synthetic leaf to its parent.
+                // That second activation still belongs to the same editor.
+                const embedded = activeEmbedded;
+                const keepEmbedded = embedded?.parent === leaf &&
+                    embedded.child.containerEl.isConnected &&
+                    embedded.child.containerEl.contains(
+                        embedded.child.containerEl.ownerDocument.activeElement
+                    );
+                if (!keepEmbedded) forgetEmbedded();
                 if (typeof options === "boolean") {
                     next.call(this, leaf, options, focus);
                 } else {
                     next.call(this, leaf, options);
                 }
+                if (keepEmbedded && embedded.child.view instanceof MarkdownView) {
+                    this.activeEditor = embedded.child.view;
+                }
             };
         },
     });
     plugin.register(workspaceUninstall);
+
+    const workspace: FileViewWorkspace = plugin.app.workspace;
+    if (typeof workspace.getActiveFileView === "function") {
+        plugin.register(around(workspace, {
+            getActiveFileView(next: () => FileView | null) {
+                return function (this: Workspace): FileView | null {
+                    const embedded = activeEmbedded;
+                    if (
+                        embedded?.child.containerEl.isConnected &&
+                        this.getActiveViewOfType(View) === embedded.parent.view &&
+                        embedded.child.view instanceof MarkdownView
+                    ) {
+                        return embedded.child.view;
+                    }
+                    const nativeView: unknown = next.call(this);
+                    return nativeView instanceof FileView ? nativeView : null;
+                };
+            },
+        }));
+    }
 
     const leafUninstall = around(WorkspaceLeaf.prototype, {
         detach(next: WorkspaceLeaf["detach"]) {

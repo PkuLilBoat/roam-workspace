@@ -25,7 +25,8 @@ try {
                         export class View {
                             constructor() { this.leaf = null; }
                         }
-                        export class MarkdownView extends View {}
+                        export class FileView extends View {}
+                        export class MarkdownView extends FileView {}
                         export class Workspace {
                             constructor() {
                                 this.activeLeaf = null;
@@ -33,6 +34,16 @@ try {
                                 this.recent = [];
                                 this.rootSplit = new WorkspaceItem();
                                 this.activations = [];
+                            }
+                            getActiveFileView() {
+                                return this.activeLeaf?.view instanceof FileView ? this.activeLeaf.view : this.lastFileView ?? null;
+                            }
+                            createLeafInParent(parent) {
+                                const leaf = new WorkspaceLeaf(this, new View());
+                                leaf.parent = parent;
+                                this.setActiveLeaf(leaf);
+                                if (parent.fail) throw Error('mount failed');
+                                return leaf;
                             }
                             getActiveViewOfType(type) {
                                 return this.activeLeaf?.view instanceof type ? this.activeLeaf.view : null;
@@ -54,7 +65,8 @@ try {
                                 this.parentLeaf = undefined;
                                 this.containerEl = {
                                     isConnected: true,
-                                    ownerDocument: { defaultView: null },
+                                    ownerDocument: { defaultView: null, activeElement: null },
+                                    contains: (element) => element === this,
                                 };
                                 this.pinned = false;
                             }
@@ -79,7 +91,7 @@ try {
                             constructor(path) { this.path = path; }
                         }
                         globalThis.__compatTestObsidian = {
-                            MarkdownView, Plugin, TFile, View, Workspace, WorkspaceItem, WorkspaceLeaf,
+                            FileView, MarkdownView, Plugin, TFile, View, Workspace, WorkspaceItem, WorkspaceLeaf,
                         };
                     `,
                 }));
@@ -109,6 +121,15 @@ try {
     const child = new WorkspaceLeaf(workspace, markdown, true);
     child.parentLeaf = journalParent;
     const normal = new WorkspaceLeaf(workspace, new MarkdownView());
+    workspace.lastFileView = normal.view;
+
+    const passiveParent = {containerEl: {closest: () => ({})}};
+    const ordinaryParent = {containerEl: {closest: () => null}};
+    workspace.setActiveLeaf(normal);
+    const pendingChild = workspace.createLeafInParent(passiveParent, 0);
+    assert.equal(workspace.activeLeaf, normal,
+        "background creation before parentLeaf assignment must preserve ordinary focus");
+    assert.equal(pendingChild.parentLeaf, undefined);
 
     workspace.setActiveLeaf(child, { focus: true });
     assert.equal(workspace.activeLeaf, journalParent);
@@ -116,6 +137,36 @@ try {
     assert.deepEqual(workspace.activations.at(-1), [journalParent, { focus: true }]);
     assert.equal(workspace.getActiveViewOfType(View), parentView);
     assert.equal(workspace.getActiveViewOfType(MarkdownView), markdown);
+    assert.equal(workspace.getActiveFileView(), markdown,
+        "status-bar file lookup must agree with the active embedded editor, not a background pane");
+    child.containerEl.ownerDocument.activeElement = child;
+    workspace.setActiveLeaf(journalParent);
+    assert.equal(workspace.activeEditor, markdown,
+        "bubbling native focus must not forget the embedded editor when it reactivates its parent");
+    assert.equal(workspace.getActiveFileView(), markdown);
+    workspace.createLeafInParent(passiveParent, 0);
+    assert.equal(workspace.activeLeaf, journalParent);
+    assert.equal(workspace.getActiveFileView(), markdown,
+        "background creation must preserve the focused embedded editor");
+    passiveParent.fail = true;
+    assert.throws(() => workspace.createLeafInParent(passiveParent, 0), /mount failed/);
+    workspace.setActiveLeaf(pendingChild);
+    assert.equal(workspace.activeLeaf, pendingChild,
+        "failed creation must release its transient activation guard");
+    passiveParent.fail = false;
+    const ordinaryCreated = workspace.createLeafInParent(ordinaryParent, 0);
+    assert.equal(workspace.activeLeaf, ordinaryCreated,
+        "ordinary native leaf creation must still activate its new leaf");
+    workspace.setActiveLeaf(child, {focus: true});
+    child.containerEl.ownerDocument.activeElement = null;
+    workspace.setActiveLeaf(journalParent);
+    assert.equal(workspace.activeEditor, null,
+        "an explicit parent activation outside the child clears embedded context");
+    workspace.setActiveLeaf(child, { focus: true });
+    child.containerEl.isConnected = false;
+    assert.equal(workspace.getActiveFileView(), normal.view,
+        "disconnected embedded view falls back to native file lookup");
+    child.containerEl.isConnected = true;
     child.detach();
     assert.equal(workspace.getActiveViewOfType(MarkdownView), null,
         "detached editor must not be returned as the active view");
@@ -136,6 +187,8 @@ try {
     workspace.setActiveLeaf(normal, { focus: false });
     assert.equal(workspace.activeLeaf, normal);
     assert.equal(workspace.activeEditor, normal.view);
+    assert.equal(workspace.getActiveFileView(), normal.view,
+        "switching to an ordinary pane keeps native file lookup");
     assert.equal(workspace.getActiveViewOfType(MarkdownView), normal.view);
     child.setPinned(false);
     assert.equal(child.pinned, true, "embedded leaves remain pinned");
@@ -195,6 +248,15 @@ try {
     assert.deepEqual(workspace.recent, [file, file, file, file, file],
         "ordinary native recent-file behavior survives unload");
     assert.equal(recentPlugin.shouldAddFile(file), true);
+    assert.equal(workspace.getActiveFileView(), normal.view,
+        "plugin unload restores the original file lookup");
+    const workspaceWithoutFileLookup = new Workspace();
+    workspaceWithoutFileLookup.getActiveFileView = undefined;
+    const fallbackPlugin = new Plugin({ workspace: workspaceWithoutFileLookup });
+    installEmbeddedWorkspaceCompatibility(fallbackPlugin);
+    assert.equal(workspaceWithoutFileLookup.getActiveFileView, undefined,
+        "missing private host capability must not be invented");
+    for (const cleanup of fallbackPlugin.cleanups) cleanup();
     external();
 
     console.log("Embedded workspace compatibility tests passed");

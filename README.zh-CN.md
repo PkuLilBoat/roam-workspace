@@ -8,7 +8,7 @@
 
 [English](README.md) | 简体中文
 
-把日志、关联页面和近期活动放进同一个 Obsidian 工作区。本仓库已用本地当前集成版更新，源码基线为 `55818810dae2d28ca065843905a77436051258d8`（2026-10-09），替代旧的 Roam In Ob 快照。
+把日志、关联页面和近期活动放进同一个 Obsidian 工作区。本仓库已用本地当前集成版更新，源码基线为 `73dc52af342aa104e2e4db1849194a8a3f3aa6e6`（2026-10-18），替代旧的 Roam In Ob 快照。
 
 ## 界面预览
 
@@ -31,7 +31,7 @@ List Heading：按笔记中的真实列表层级导航。
 
 ## 安装
 
-从 [0.1.0 发布页](https://github.com/PkuLilBoat/roam-workspace/releases/tag/0.1.0) 下载 `main.js`、`manifest.json`、`styles.css`，直接放进 `<库>/<配置目录>/plugins/roam-workspace/`，配置目录通常是 `.obsidian`。重载 Obsidian，必要时允许使用第三方插件，在设置中启用 **Roam Workspace**。源码 ZIP 不包含 `main.js`。
+从 [最新发布页](https://github.com/PkuLilBoat/roam-workspace/releases/latest) 下载 `main.js`、`manifest.json`、`styles.css`，直接放进 `<库>/<配置目录>/plugins/roam-workspace/`，配置目录通常是 `.obsidian`。重载 Obsidian，必要时允许使用第三方插件，在设置中启用 **Roam Workspace**。源码 ZIP 不包含 `main.js`。
 
 更新前备份原插件文件夹并保留 `data.json`。插件 ID 是 `roam-workspace`；旧的 `roam-in-ob` 和 Daily Notes Editor 是不同安装。兼容性排查时可关闭功能重叠的插件，不要自动删除或迁移它们的数据。
 
@@ -60,9 +60,13 @@ pnpm run lint
 
 ## 来源与许可
 
-源自 [Daily Notes Editor](https://github.com/Quorafind/Obsidian-Daily-Notes-Editor)，嵌入式编辑器部分源自 [Hover Editor](https://github.com/nothingislost/obsidian-hover-editor)。详见[第三方声明](THIRD_PARTY_NOTICES.md)与[历史 README](docs/UPSTREAM-README.md)。
+**PkuLilBoat 拥有版权的原创贡献允许非商业使用；商业使用必须事先取得 PkuLilBoat 的明确书面授权。** 具体范围和条款见 [LICENSE](LICENSE)。商业使用包括企业内部业务使用、收费客户项目、转售、收费托管与付费产品集成。可通过 [GitHub Issues](https://github.com/PkuLilBoat/roam-workspace/issues) 或上方维护者联系方式申请；提出申请不等于取得许可。此为源码可见的自定义许可，不属于 OSI 认可的开源许可证。
 
-旧仓库记录的 Daily Notes Editor 继承代码根许可尚未解决，本次保留该状态，不把整个项目重新声明为 MIT，也不声称已厘清继承代码分发权限。Outliner 保留其独立 MIT 许可及声明。本次开发快照发布不代表官方目录审核或生产可用性验收。
+非商业分发时，须保留许可证及适用声明，并在分发页面或随附说明中清晰注明原作者 PkuLilBoat、项目名称 Roam Workspace 和[原始 GitHub 仓库链接](https://github.com/PkuLilBoat/roam-workspace)。修改版须说明已作修改及主要改动，不得冒充原作者的官方版本。
+
+Roam Workspace 由 PkuLilBoat 维护。维护者确认，早期基础实现已经在后续开发中全部重写；原先将当前项目描述为继承 Daily Notes Editor 代码的说明据此更新。插件安装 ID 为 `roam-workspace`。
+
+原创贡献许可不覆盖单独保留的第三方组件；Hover Editor、Outliner 及依赖仍适用各自版权、许可与署名要求，详见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ## 反馈
 

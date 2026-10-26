@@ -310,6 +310,46 @@ function getVisibleIndentDepths(
     return new Set(getSortedIndentDepths(items).slice(0, depth));
 }
 
+export function getListHeadingFoldTargets(
+    items: ListHeadingItem[],
+    depth: ListHeadingDepth
+): number[] {
+    const indentDepth = depth === 0 ? undefined : getSortedIndentDepths(items)[depth - 1];
+    const ends = getListHeadingDescendantEnds(items);
+    return items.flatMap((item, index) => {
+        const matches = depth === 0
+            ? item.kind !== "indent-block"
+            : indentDepth !== undefined && item.kind === "indent-block" && item.indentDepth === indentDepth;
+        return matches && ends[index] > index + 1 ? [index] : [];
+    });
+}
+
+export function applyListHeadingDepthFold(
+    items: ListHeadingItem[],
+    keys: string[],
+    collapsed: ReadonlySet<string>,
+    depth: ListHeadingDepth,
+    collapse: boolean
+): Set<string> {
+    const next = new Set(collapsed);
+    const targets = new Set(getListHeadingFoldTargets(items, depth));
+    const ends = getListHeadingDescendantEnds(items);
+    const ancestors: number[] = [];
+    items.forEach((_, index) => {
+        while (ancestors.length && ends[ancestors[ancestors.length - 1]] <= index) ancestors.pop();
+        if (targets.has(index)) {
+            if (collapse) {
+                next.add(keys[index]);
+            } else {
+                next.delete(keys[index]);
+                for (const ancestor of ancestors) next.delete(keys[ancestor]);
+            }
+        }
+        if (ends[index] > index + 1) ancestors.push(index);
+    });
+    return next;
+}
+
 function getSortedIndentDepths(items: ListHeadingItem[]): number[] {
     return Array.from(
         new Set(

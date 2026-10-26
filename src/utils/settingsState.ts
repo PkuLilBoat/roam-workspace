@@ -8,6 +8,7 @@ import { normalizeRecentFileClassFilter } from "../navigation/recentFileClassFil
 import { normalizeFilterValues, restorePropertyFilters } from "../navigation/recentMultiFilter";
 import { restoreRecentTaskBlockRecords } from "../navigation/recentTaskBlocks";
 import { restoreRecentPaths } from "./recentFiles";
+import { restoreNavigationConfiguration, restoreBookmarkGroupCollapsed } from "../navigation/configuration";
 
 interface DailyNoteSettingsLike {
     hideFrontmatter?: unknown;
@@ -20,6 +21,9 @@ interface DailyNoteSettingsLike {
     showSourcePath?: unknown;
     enableExportMarkdown?: unknown;
     navigationViews?: unknown;
+    navigationConfiguration?: unknown;
+    additionalJournalsCollapsed?: unknown;
+    bookmarkGroupCollapsed?: unknown;
     navigationSectionCollapsed?: unknown;
     recentFileClassFilter?: unknown;
     recentFileTagsFilter?: unknown;
@@ -77,6 +81,9 @@ export function restoreDailyNoteSettings(
             raw.navigationViews,
             defaults.navigationViews
         ),
+        navigationConfiguration: restoreNavigationConfiguration(raw.navigationConfiguration),
+        additionalJournalsCollapsed: booleanOrDefault(raw.additionalJournalsCollapsed, defaults.additionalJournalsCollapsed),
+        bookmarkGroupCollapsed: restoreBookmarkGroupCollapsed(raw.bookmarkGroupCollapsed),
         navigationSectionCollapsed: restoreNavigationSectionCollapsed(
             raw.navigationSectionCollapsed,
             defaults.navigationSectionCollapsed

@@ -1,6 +1,6 @@
 {
     "name": "roam-workspace",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Journal, page stream, and recent activity navigation in one workspace.",
     "main": "main.js",
     "scripts": {
@@ -10,21 +10,22 @@
         "build": "node scripts/build-with-fingerprint.mjs",
         "test:journal": "node scripts/test-journal-core.mjs",
         "test:journal-native-save-runtime": "node scripts/test-journal-native-save-runtime.mjs",
+        "test:journal-editor-context-runtime": "node scripts/test-journal-editor-context-runtime.mjs",
         "test:journal-editor-recovery": "node scripts/test-journal-editor-recovery.mjs",
         "test:compat-quality": "node scripts/test-embedded-workspace-compatibility.mjs && node scripts/test-page-stream-native-router.mjs && node scripts/test-journal-source-repository.mjs && node scripts/test-journal-file-events.mjs",
         "test:page-stream-priority": "node scripts/test-page-stream-editor-priority.mjs",
         "test:page-stream-mutation-contract": "node scripts/test-page-stream-mutation-contract.mjs",
         "test:page-stream-content-audit": "node scripts/validate-page-stream-content-continuity-audit.mjs",
         "test:audit-layout-neutrality": "node scripts/test-audit-layout-neutrality.mjs",
-    "test:navigation": "node scripts/test-navigation-integrations.mjs",
-    "test:navigation:multi": "node scripts/test-navigation-multifilter.mjs",
-    "test:open-default-view-audit": "node scripts/test-open-default-view-audit.mjs",
-    "test:read-only-mount-matrix": "node scripts/test-read-only-mount-matrix.mjs",
+        "test:navigation": "node scripts/test-navigation-integrations.mjs",
+        "test:navigation:multi": "node scripts/test-navigation-multifilter.mjs",
+        "test:open-default-view-audit": "node scripts/test-open-default-view-audit.mjs",
+        "test:read-only-mount-matrix": "node scripts/test-read-only-mount-matrix.mjs",
         "test:settings-ui-audit": "node scripts/test-settings-ui-audit.mjs",
-    "test:preview-edit-save-audit": "node scripts/test-preview-edit-save-audit.mjs",
-    "test:audit-target-readiness": "node scripts/test-audit-target-readiness.mjs",
-    "test:preview-edit-transaction-cleanup": "node scripts/test-preview-edit-transaction-cleanup.mjs",
-    "test:product-ready-baseline": "node scripts/test-product-ready-baseline.mjs",
+        "test:preview-edit-save-audit": "node scripts/test-preview-edit-save-audit.mjs",
+        "test:audit-target-readiness": "node scripts/test-audit-target-readiness.mjs",
+        "test:preview-edit-transaction-cleanup": "node scripts/test-preview-edit-transaction-cleanup.mjs",
+        "test:product-ready-baseline": "node scripts/test-product-ready-baseline.mjs",
         "test:performance-audit": "node scripts/test-performance-audit-contract.mjs",
         "test:vault-root": "node scripts/test-vault-root-contract.mjs",
         "test:current-bundle": "node scripts/test-current-bundle-contract.mjs",
@@ -54,7 +55,7 @@
         "version": "node version-bump.mjs && git add manifest.json versions.json"
     },
     "keywords": [],
-    "author": "Quorafind",
+    "author": "PkuLilBoat",
     "devDependencies": {
         "@eslint/js": "^9.39.5",
         "@eslint/json": "0.14.0",
@@ -92,5 +93,6 @@
         "overrides": {
             "obsidian-daily-notes-interface>obsidian": "^1.8.7"
         }
-    }
+    },
+    "license": "SEE LICENSE IN LICENSE"
 }

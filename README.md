@@ -8,7 +8,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Edit journals, connected pages, and recent activity in one Obsidian workspace. This repository contains the current local integration based on source commit `55818810dae2d28ca065843905a77436051258d8` (2026-10-09), replacing the older Roam In Ob snapshot.
+Edit journals, connected pages, and recent activity in one Obsidian workspace. This repository contains the current local integration based on source commit `73dc52af342aa104e2e4db1849194a8a3f3aa6e6` (2026-10-18), replacing the older Roam In Ob snapshot.
 
 ## Screenshots
 
@@ -31,7 +31,7 @@ Captured in Obsidian 1.14.4 with the GitHub 0.1.0 release and sample notes in an
 
 ## Install
 
-Download `main.js`, `manifest.json`, and `styles.css` from the [0.1.0 release](https://github.com/PkuLilBoat/roam-workspace/releases/tag/0.1.0). Put all three files directly in `<vault>/<configDir>/plugins/roam-workspace/` (`configDir` is usually `.obsidian`). Reload Obsidian, allow community plugins if needed, and enable **Roam Workspace**. Source ZIP downloads do not contain `main.js`.
+Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/PkuLilBoat/roam-workspace/releases/latest). Put all three files directly in `<vault>/<configDir>/plugins/roam-workspace/` (`configDir` is usually `.obsidian`). Reload Obsidian, allow community plugins if needed, and enable **Roam Workspace**. Source ZIP downloads do not contain `main.js`.
 
 Back up an existing plugin folder before updating and preserve `data.json`. The plugin ID is `roam-workspace`; an older `roam-in-ob` or Daily Notes Editor installation is separate. Disable overlapping plugins when checking compatibility, and do not delete or migrate their data automatically.
 
@@ -60,9 +60,13 @@ pnpm run lint
 
 ## Provenance and license
 
-Derived from [Daily Notes Editor](https://github.com/Quorafind/Obsidian-Daily-Notes-Editor), with embedded-editor origins in [Hover Editor](https://github.com/nothingislost/obsidian-hover-editor). See [third-party notices](THIRD_PARTY_NOTICES.md) and the [historical README](docs/UPSTREAM-README.md).
+**Noncommercial use of PkuLilBoat's original contributions is permitted; commercial use requires PkuLilBoat's prior written permission.** See the [license](LICENSE) for scope and terms. Commercial use includes internal business use, paid client work, resale, paid hosting, and paid product integration. Request authorization through [GitHub Issues](https://github.com/PkuLilBoat/roam-workspace/issues) or the maintainer's contact information above; submitting a request is not permission. These are source-available terms, not an OSI-approved open-source license.
 
-The earlier repository records unresolved root licensing for inherited Daily Notes Editor code. This update preserves that status and does not claim a new blanket MIT license or clear inherited distribution rights. The Outliner module retains its own MIT notice and license. This development publication is not a claim of Community-directory approval or production readiness.
+Noncommercial redistribution must retain the license and applicable notices, and clearly credit PkuLilBoat, name Roam Workspace, and link to the [original repository](https://github.com/PkuLilBoat/roam-workspace) on the distribution page or in accompanying documentation. Modified versions must identify material changes and must not be presented as official releases by the original author.
+
+Roam Workspace is maintained by PkuLilBoat. The maintainer confirms that the earlier base implementation was subsequently fully rewritten. This replaces the previous description of the current project as inherited Daily Notes Editor code. The installation ID is `roam-workspace`.
+
+The original-contribution license does not replace the terms of separately retained third-party components, including Hover Editor, Outliner, and dependencies. See [third-party notices](THIRD_PARTY_NOTICES.md). Their attribution and licenses remain applicable.
 
 ## Feedback
 

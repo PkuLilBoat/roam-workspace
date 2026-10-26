@@ -44,11 +44,24 @@ export class JournalV2View extends ItemView {
     }
 
     getDisplayText(): string {
+        const config = this.host.settings.navigationConfiguration;
+        const isDefault = this.host.settings.defaultOpenMode === "daily"
+            ? this.selectionMode === "daily"
+            : this.selectionMode === "folder" && this.target === this.host.settings.journalFolder;
+        if (isDefault && config.journalName !== "Journal stream") return config.journalName;
+        if (this.selectionMode === "folder") {
+            const shortcut = config.journals.find((journal) => journal.folder === this.target);
+            if (shortcut) return shortcut.name;
+        }
         if (this.selectionMode === "daily") return "Daily notes";
         if (this.selectionMode === "tag") return `Tag: ${this.target}`;
         return this.target === this.host.settings.journalFolder
             ? `Journal: ${this.target}`
             : `Folder: ${this.target}`;
+    }
+
+    refreshDisplayName(): void {
+        this.updateLeafIdentity();
     }
 
     getIcon(): string {

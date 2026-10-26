@@ -2,6 +2,8 @@ import {
     ItemView,
     MarkdownView,
     normalizePath,
+    Notice,
+    parseLinktext,
     setIcon,
     TFile,
     TFolder,
@@ -38,6 +40,10 @@ import {
 import type DailyNoteViewPlugin from "./dailyNoteViewIndex";
 import { ROAM_NAVIGATION_VIEW_TYPE } from "./roamTypes";
 import type { NavigationViewId } from "./roamTypes";
+import { buildBookmarkTree, type BookmarkNode, type BookmarkTarget } from "./navigation/bookmarkTree";
+import type { NavigationLink } from "./navigation/configuration";
+import { builtinAppearance } from "./navigation/management";
+import { bindNavigationMenu, navigationIcon } from "./navigation/managementUi";
 
 const INITIAL_ENTRY_BATCH = 40;
 const NEXT_ENTRY_BATCH = 80;
@@ -50,15 +56,9 @@ type NavigationEntry = {
     onClick: (event: MouseEvent) => void | Promise<void>;
 };
 
-type BookmarkTarget = {
-    type: "file" | "folder";
-    path: string;
-    label: string;
-};
-
 type BookmarkSnapshot = {
     signature: string;
-    targets: BookmarkTarget[];
+    nodes: BookmarkNode[];
 };
 
 type ScheduledFrame = {
@@ -224,7 +224,7 @@ export class RoamNavigationView extends ItemView {
 
         const entries: Record<NavigationViewId, NavigationEntry> = {
             "journal-stream": {
-                label: "Journal stream",
+                label: this.plugin.settings.navigationConfiguration.journalName,
                 description: "Open the Journal stream in the main area",
                 icon: "calendar-range",
                 onClick: () => this.plugin.openDefaultJournalView(),
@@ -247,10 +247,26 @@ export class RoamNavigationView extends ItemView {
 
         const section = container.createDiv({ cls: "roam-nav-section" });
         section.createDiv({ cls: "roam-nav-section-title", text: "Navigation" });
+        bindNavigationMenu(section, this.plugin);
+        bindNavigationMenu(header, this.plugin);
         for (const id of this.plugin.settings.navigationViews) {
-            this.renderEntry(section, entries[id]);
+            const appearance = builtinAppearance(this.plugin.settings.navigationConfiguration, id);
+            const entry = { ...entries[id], label: appearance.name, icon: navigationIcon(appearance.icon, entries[id].icon) };
+            if (id === "journal-stream") this.renderJournalShortcuts(section, entry);
+            else bindNavigationMenu(this.renderEntry(section, entry), this.plugin, { kind: "builtin", id });
         }
-        if (!this.plugin.settings.navigationViews.length) {
+        for (const link of this.plugin.settings.navigationConfiguration.links.filter(link => !link.hidden)) {
+            const button = this.renderEntry(section, {
+                label: link.name,
+                description: link.target,
+                icon: navigationIcon(link.icon, link.type === "web" ? "external-link" : "file-text"),
+                onClick: () => this.openConfiguredLink(link),
+            });
+            bindNavigationMenu(button, this.plugin, { kind: "link", id: link.id });
+            button.dataset.shortcutId = link.id;
+            button.dataset.shortcutType = link.type;
+        }
+        if (!this.plugin.settings.navigationViews.length && !this.plugin.settings.navigationConfiguration.links.some(link => !link.hidden)) {
             section.createDiv({
                 cls: "roam-nav-empty",
                 text: "Choose shortcuts in plugin settings.",
@@ -330,7 +346,7 @@ export class RoamNavigationView extends ItemView {
         this.registerEvent(this.app.vault.on("delete", () => this.render()));
     }
 
-    private renderEntry(parent: HTMLElement, entry: NavigationEntry): void {
+    private renderEntry(parent: HTMLElement, entry: NavigationEntry): HTMLButtonElement {
         const button = parent.createEl("button", {
             cls: "roam-nav-entry",
             attr: {
@@ -343,8 +359,72 @@ export class RoamNavigationView extends ItemView {
         setIcon(icon, entry.icon);
         button.createSpan({ cls: "roam-nav-entry-label", text: entry.label });
         button.addEventListener("click", (event) => {
-            void entry.onClick(event);
+            void Promise.resolve().then(() => entry.onClick(event)).catch((error: unknown) => {
+                new Notice(`Could not open ${entry.label}: ${error instanceof Error ? error.message : "Unknown error"}`);
+            });
         });
+        return button;
+    }
+
+    private renderJournalShortcuts(parent: HTMLElement, entry: NavigationEntry): void {
+        const journals = this.plugin.settings.navigationConfiguration.journals.filter(journal => !journal.hidden);
+        const row = parent.createDiv({ cls: "roam-nav-journal-row" });
+        const primary = this.renderEntry(row, entry);
+        primary.dataset.journalDefault = "true";
+        bindNavigationMenu(primary, this.plugin, { kind: "builtin", id: "journal-stream" });
+        if (!journals.length) return;
+        const toggle = row.createEl("button", {
+            cls: "roam-nav-section-toggle roam-nav-journal-toggle",
+            attr: { type: "button" },
+        });
+        const children = parent.createDiv({ cls: "roam-nav-journal-children" });
+        for (const journal of journals) {
+            const button = this.renderEntry(children, {
+                label: journal.name,
+                description: journal.folder,
+                icon: navigationIcon(journal.icon, "calendar-range"),
+                onClick: async () => {
+                    const folder = this.app.vault.getAbstractFileByPath(journal.folder);
+                    if (!(folder instanceof TFolder)) {
+                        new Notice(`Journal folder not found: ${journal.folder}`);
+                        return;
+                    }
+                    await this.plugin.openFolderView(folder.path, "journalDate");
+                },
+            });
+            bindNavigationMenu(button, this.plugin, { kind: "journal", id: journal.id });
+            button.dataset.journalId = journal.id;
+        }
+        const updateState = () => {
+            const collapsed = this.plugin.settings.additionalJournalsCollapsed;
+            children.hidden = collapsed;
+            toggle.setAttribute("aria-expanded", String(!collapsed));
+            toggle.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} additional journals`);
+            toggle.setAttribute("title", `${collapsed ? "Expand" : "Collapse"} additional journals`);
+            toggle.empty();
+            setIcon(toggle, collapsed ? "chevron-right" : "chevron-down");
+        };
+        toggle.addEventListener("click", () => {
+            this.plugin.settings.additionalJournalsCollapsed = !this.plugin.settings.additionalJournalsCollapsed;
+            updateState();
+            void this.plugin.saveSettings();
+        });
+        updateState();
+    }
+
+    private async openConfiguredLink(link: NavigationLink): Promise<void> {
+        if (link.type === "web") {
+            window.open(link.target, "_blank", "noopener,noreferrer");
+            return;
+        }
+        const target = link.target.replace(/^\[\[|\]\]$/g, "").split("|")[0];
+        const { path } = parseLinktext(target);
+        const file = this.app.metadataCache.getFirstLinkpathDest(path, "");
+        if (!(file instanceof TFile) || file.extension !== "md") {
+            new Notice(`Note not found: ${link.target}`);
+            return;
+        }
+        await this.app.workspace.openLinkText(target, "", false);
     }
 
     private renderRecentFiles(container: HTMLElement): void {
@@ -536,21 +616,57 @@ export class RoamNavigationView extends ItemView {
         this.bookmarkSignature = snapshot.signature;
         body.querySelector(".roam-nav-bookmarks-loading")?.remove();
 
-        if (!snapshot.targets.length) {
+        if (!snapshot.nodes.length) {
             body.createDiv({ cls: "roam-nav-empty", text: "No Markdown bookmarks found." });
             return;
         }
 
+        this.renderBookmarkNodes(body, snapshot.nodes, generation);
+    }
+
+    private renderBookmarkNodes(body: HTMLElement, nodes: BookmarkNode[], generation: number): void {
         this.renderInBatches(
             body,
-            snapshot.targets,
+            nodes,
             () => generation === this.bookmarkRenderGeneration && body.isConnected,
             (target) => {
+                if (target.type === "group") {
+                    this.renderBookmarkGroup(body, target, generation);
+                    return;
+                }
                 const abstractFile = this.app.vault.getAbstractFileByPath(target.path);
                 const file = abstractFile instanceof TFile ? abstractFile : null;
                 this.renderFileRow(body, target.label, target.path, file, true, target);
             }
         );
+    }
+
+    private renderBookmarkGroup(parent: HTMLElement, group: Extract<BookmarkNode, { type: "group" }>, generation: number): void {
+        const container = parent.createDiv({ cls: "roam-nav-bookmark-group", attr: { "data-bookmark-group": group.key } });
+        const toggle = container.createEl("button", { cls: "roam-nav-bookmark-group-toggle", attr: { type: "button" } });
+        const icon = toggle.createSpan({ attr: { "aria-hidden": "true" } });
+        toggle.createSpan({ cls: "roam-nav-entry-label", text: group.label });
+        const children = container.createDiv({ cls: "roam-nav-bookmark-children" });
+        let rendered = false;
+        const updateState = () => {
+            const collapsed = this.plugin.settings.bookmarkGroupCollapsed[group.key] === true;
+            children.hidden = collapsed;
+            toggle.setAttribute("aria-expanded", String(!collapsed));
+            toggle.setAttribute("aria-label", `${collapsed ? "Expand" : "Collapse"} ${group.label} bookmark group`);
+            icon.empty();
+            setIcon(icon, collapsed ? "chevron-right" : "chevron-down");
+            if (!collapsed && !rendered) {
+                rendered = true;
+                if (group.children.length) this.renderBookmarkNodes(children, group.children, generation);
+                else children.createDiv({ cls: "roam-nav-empty", text: "No Markdown bookmarks in this group." });
+            }
+        };
+        toggle.addEventListener("click", () => {
+            this.plugin.settings.bookmarkGroupCollapsed[group.key] = !(this.plugin.settings.bookmarkGroupCollapsed[group.key] === true);
+            updateState();
+            void this.plugin.saveSettings();
+        });
+        updateState();
     }
 
     private createCollapsibleSection(
@@ -1153,10 +1269,15 @@ export class RoamNavigationView extends ItemView {
             const items = isRecord(parsed) && Array.isArray(parsed.items) ? parsed.items : [];
             return {
                 signature: createContentSignature(text),
-                targets: this.flattenBookmarkTargets(items),
+                nodes: buildBookmarkTree(items, (path, type) => {
+                    const file = this.app.vault.getAbstractFileByPath(path);
+                    if (type === "file" && file instanceof TFile && file.extension === "md") return file.path;
+                    if (type === "folder" && file instanceof TFolder) return file.path;
+                    return null;
+                }),
             };
         } catch {
-            return { signature: "missing", targets: [] };
+            return { signature: "missing", nodes: [] };
         }
     }
 
@@ -1176,30 +1297,6 @@ export class RoamNavigationView extends ItemView {
         } finally {
             this.bookmarkPollInFlight = false;
         }
-    }
-
-    private flattenBookmarkTargets(items: unknown[]): BookmarkTarget[] {
-        const targets: BookmarkTarget[] = [];
-        for (const item of items) {
-            if (!isRecord(item)) continue;
-            if (item.type === "group" && Array.isArray(item.items)) {
-                targets.push(...this.flattenBookmarkTargets(item.items));
-                continue;
-            }
-            if (typeof item.path !== "string") continue;
-            const abstractFile = this.app.vault.getAbstractFileByPath(item.path);
-            const label =
-                typeof item.title === "string" && item.title.trim()
-                    ? item.title.trim()
-                    : item.path.split("/").pop() ?? item.path;
-            if (item.type === "file" && abstractFile instanceof TFile) {
-                if (abstractFile.extension !== "md") continue;
-                targets.push({ type: "file", path: abstractFile.path, label });
-            } else if (item.type === "folder" && abstractFile instanceof TFolder) {
-                targets.push({ type: "folder", path: abstractFile.path, label });
-            }
-        }
-        return targets;
     }
 
     private renderFileRow(

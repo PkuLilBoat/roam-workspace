@@ -1,0 +1,68 @@
+Roam Workspace — Noncommercial License with Commercial Permission, v1.0
+Effective date: 2026-10-24
+
+Copyright (c) 2026 PkuLilBoat, for original contributions owned by PkuLilBoat only.
+
+1. Scope and third-party materials
+This license applies only to copyrightable original contributions in Roam
+Workspace for which PkuLilBoat owns the copyright and can grant permission
+("Covered Contributions"). It does not apply to third-party code, dependencies,
+assets, inherited code, or contributions owned by others. See
+THIRD_PARTY_NOTICES.md and the notices accompanying those materials. Their
+respective terms remain in force. This license neither grants missing upstream
+permissions nor asserts ownership of the entire combined project.
+
+2. Noncommercial permission
+Subject to this license and any separately applicable third-party terms, you may
+use, study, copy, modify, and redistribute the Covered Contributions, in source
+or binary form, solely for noncommercial purposes, without a license fee.
+Redistribution means providing copies of the Covered Contributions to others,
+in source or binary form, whether modified or unmodified, including through
+forks, download sites, file-sharing services, or direct transfers.
+Redistributions must retain this license and applicable copyright and source
+notices, and must clearly identify the original author (PkuLilBoat), project
+name (Roam Workspace), and original repository URL
+(https://github.com/PkuLilBoat/roam-workspace) on the distribution page or in
+accompanying documentation. Modified versions must clearly state that they
+have been modified and identify material modifications; they must not be
+presented as an official release by the original author. Redistributors must
+provide these same noncommercial terms for the Covered Contributions. You may
+not offer recipients commercial rights that you have not separately obtained.
+
+3. Commercial use requires prior written permission
+Commercial use of the Covered Contributions is prohibited unless PkuLilBoat
+has granted you prior, explicit written permission. Commercial use includes
+selling or licensing the software or derivatives; paid hosting, SaaS, or paid
+services incorporating them; bundling them with a paid product; and use in the
+operations of a business or in paid client work. Nonprofit status alone does
+not exempt a commercial activity. Personal learning, unpaid research, and
+noncommercial teaching are permitted under section 2.
+
+Request permission at https://github.com/PkuLilBoat/roam-workspace/issues
+or through the maintainer's contact details linked in the README. A request,
+GitHub access, a donation, a purchase, or silence is not authorization.
+Permission may be granted free of charge or under separately agreed commercial
+terms; only the explicit written grant determines its scope.
+
+4. Other rights and previous grants
+No trademark or patent license is granted. This license does not revoke rights
+already granted under an earlier valid license and does not restrict independent
+third-party materials beyond their own terms. Permission from PkuLilBoat covers
+only rights PkuLilBoat can grant; obtain any additional upstream permissions
+required for use or distribution of the combined software.
+
+5. Termination
+Permission under this license ends if you violate its terms. It is reinstated
+if you cure the violation within 30 days after becoming aware of it, unless
+PkuLilBoat has expressly terminated it in writing. Sections 1, 3, 4, and 6
+continue to apply after termination.
+
+6. Disclaimer
+THE COVERED CONTRIBUTIONS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE
+LAW, THE COPYRIGHT HOLDER IS NOT LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM THEIR USE.
+
+This is a custom source-available license. It is not the MIT license and is
+not an OSI-approved open-source license.

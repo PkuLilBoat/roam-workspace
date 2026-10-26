@@ -3,6 +3,8 @@ import {
     ItemView,
     MarkdownRenderer,
     MarkdownView,
+    Menu,
+    Notice,
     setIcon,
     TFile,
     WorkspaceLeaf,
@@ -10,6 +12,8 @@ import {
 import type DailyNoteViewPlugin from "./dailyNoteViewIndex";
 import {
     collectListHeadingItems,
+    applyListHeadingDepthFold,
+    getListHeadingFoldTargets,
     getListHeadingDescendantEnds,
     getListHeadingItemKeys,
     parseListHeadingItems,
@@ -43,6 +47,7 @@ export class RoamListHeadingView extends ItemView {
     private collapsedItems = new Set<string>();
     private foldSourcePath: string | null = null;
     private foldItemKeys: string[] = [];
+    private depthMenu: Menu | null = null;
 
     constructor(
         leaf: WorkspaceLeaf,
@@ -115,6 +120,7 @@ export class RoamListHeadingView extends ItemView {
     }
 
     async onClose(): Promise<void> {
+        this.depthMenu?.close();
         this.clearRefreshTimer();
         this.unloadRenderedInline();
     }
@@ -207,7 +213,8 @@ export class RoamListHeadingView extends ItemView {
 
         const items = content === null ? [] : collectListHeadingItems(content, this.depth);
         const depthSummary = summarizeListHeadingDepths(content ?? "");
-        const signature = buildRenderSignature(file, this.depth, items, readFailed);
+        const allItems = parseListHeadingItems(content ?? "");
+        const signature = buildRenderSignature(file, this.depth, allItems, readFailed);
         if (signature === this.lastRenderSignature) return;
         this.lastRenderSignature = signature;
         if (this.foldSourcePath !== (file?.path ?? null)) {
@@ -215,7 +222,6 @@ export class RoamListHeadingView extends ItemView {
             this.foldItemKeys = [];
             this.foldSourcePath = file?.path ?? null;
         }
-        const allItems = parseListHeadingItems(content ?? "");
         const allKeys = getListHeadingItemKeys(allItems);
         this.collapsedItems = reconcileListHeadingCollapsedKeys(
             this.foldItemKeys, allKeys, this.collapsedItems
@@ -223,6 +229,7 @@ export class RoamListHeadingView extends ItemView {
         this.foldItemKeys = allKeys;
 
         const container = this.contentEl;
+        this.depthMenu?.close();
         this.unloadRenderedInline();
         container.empty();
         container.addClass("roam-list-heading-view");
@@ -232,7 +239,23 @@ export class RoamListHeadingView extends ItemView {
         titleRow.createDiv({ cls: "roam-list-heading-title", text: "List heading" });
         this.renderIconButton(titleRow, "refresh-cw", "Refresh", () => this.requestRefresh());
 
-        this.renderDepthControl(header, depthSummary);
+        let updateFolds = () => {};
+        this.renderDepthControl(header, depthSummary, allItems, (depth, collapse) => {
+            void (async () => {
+                if (!(file instanceof TFile)) return;
+                const currentText = await this.readCurrentFileText(file);
+                if (!header.isConnected || this.getCurrentOutlineFile()?.path !== file.path || currentText !== content) {
+                    new Notice("文件已变化，请重新打开层级菜单。");
+                    this.requestRefresh();
+                    return;
+                }
+                this.collapsedItems = applyListHeadingDepthFold(allItems, allKeys, this.collapsedItems, depth, collapse);
+                updateFolds();
+            })().catch((error: unknown) => {
+                console.error("Failed to apply List heading depth fold:", error);
+                new Notice("无法读取当前文件，请刷新后重试。");
+            });
+        });
 
         if (!(file instanceof TFile) || file.extension !== "md") {
             this.renderEmpty(container, "Open a Markdown file to show its outline.");
@@ -256,7 +279,9 @@ export class RoamListHeadingView extends ItemView {
         const keysByOffset = new Map(allItems.map((item, index) => [item.offset, allKeys[index]]));
         const foldKeys = items.map((item) => keysByOffset.get(item.offset) ?? getItemKey(item));
         const entries: HTMLElement[] = [];
+        const updateButtons: (() => void)[] = [];
         const updateVisibility = () => {
+            updateButtons.forEach((update) => update());
             let hiddenUntil = 0;
             items.forEach((item, index) => {
                 const hidden = index < hiddenUntil;
@@ -266,6 +291,7 @@ export class RoamListHeadingView extends ItemView {
                 }
             });
         };
+        updateFolds = updateVisibility;
         items.forEach((item, index) => {
             entries.push(this.renderItem(
                 list,
@@ -273,7 +299,8 @@ export class RoamListHeadingView extends ItemView {
                 item,
                 foldKeys[index],
                 descendantEnds[index] > index + 1,
-                updateVisibility
+                updateVisibility,
+                updateButtons
             ));
         });
         updateVisibility();
@@ -281,7 +308,9 @@ export class RoamListHeadingView extends ItemView {
 
     private renderDepthControl(
         parent: HTMLElement,
-        summary: ListHeadingDepthSummary
+        summary: ListHeadingDepthSummary,
+        items: ListHeadingItem[],
+        foldAtDepth: (depth: ListHeadingDepth, collapse: boolean) => void
     ): void {
         const control = parent.createDiv({
             cls: "roam-list-heading-depth-control",
@@ -305,11 +334,6 @@ export class RoamListHeadingView extends ItemView {
                 },
             });
             tick.style.setProperty("--roam-depth-position", String(depth));
-            tick.addEventListener("pointerdown", (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.applyDepth(depth, true);
-            });
             tick.addEventListener("click", (event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -330,10 +354,97 @@ export class RoamListHeadingView extends ItemView {
                 "data-tooltip-position": "top",
             },
         });
+        const depthAtPointer = (clientX: number): ListHeadingDepth => {
+            const first = ticks.firstElementChild?.getBoundingClientRect();
+            const last = ticks.lastElementChild?.getBoundingClientRect();
+            const start = first ? first.left + first.width / 2 : 0;
+            const end = last ? last.left + last.width / 2 : 0;
+            return (end > start ? Math.round(Math.max(0, Math.min(1, (clientX - start) / (end - start))) * 5) : this.depth) as ListHeadingDepth;
+        };
+        let pointerId: number | null = null;
+        const previewDepth = (depth: ListHeadingDepth) => {
+            control.setAttr("data-depth", String(depth));
+            input.value = String(depth);
+            input.setAttr("aria-valuetext", formatDepthTooltip(depth, summary));
+            ticks.querySelectorAll<HTMLElement>(".roam-list-heading-depth-tick").forEach((tick) => {
+                const tickDepth = Number(tick.dataset.depth);
+                tick.setAttr("data-current", String(tickDepth === depth));
+                tick.setAttr("data-covered", String(tickDepth <= depth));
+            });
+        };
+        control.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+            if (event.button !== 0 || pointerId !== null) return;
+            event.stopPropagation();
+            pointerId = event.pointerId;
+            control.setPointerCapture(pointerId);
+            input.focus({ preventScroll: true });
+            previewDepth(depthAtPointer(event.clientX));
+        });
+        control.addEventListener("pointermove", (event) => {
+            if (event.pointerId === pointerId) previewDepth(depthAtPointer(event.clientX));
+        });
+        control.addEventListener("pointerup", (event) => {
+            if (event.button !== 0 || event.pointerId !== pointerId) return;
+            pointerId = null;
+            control.releasePointerCapture(event.pointerId);
+            // Keep the control mounted throughout dragging; refresh only on release.
+            this.applyDepth(depthAtPointer(event.clientX), true);
+        });
+        const cancelPointer = () => {
+            pointerId = null;
+            previewDepth(this.depth);
+        };
+        control.addEventListener("pointercancel", cancelPointer);
+        control.addEventListener("lostpointercapture", cancelPointer);
+        const showMenu = (depth: ListHeadingDepth, event?: MouseEvent) => {
+            this.depthMenu?.close();
+            const menu = new Menu();
+            this.depthMenu = menu;
+            const count = getListHeadingFoldTargets(items, depth).length;
+            menu.addItem((item) => item
+                .setTitle(`${depth === 0 ? "全部标题" : `缩进层级 ${depth}`} · ${count} 个可折叠父项`)
+                .setIsLabel(true));
+            for (const collapse of [true, false]) {
+                menu.addItem((item) => item
+                    .setTitle(collapse ? "收缩此层级" : "展开此层级")
+                    .setIcon(collapse ? "fold-vertical" : "unfold-vertical")
+                    .setDisabled(count === 0)
+                    .onClick(() => foldAtDepth(depth, collapse)));
+            }
+            if (count === 0) {
+                menu.addItem((item) => item.setTitle("此层级没有可折叠的父项").setIsLabel(true));
+            }
+            menu.onHide(() => {
+                if (this.depthMenu === menu) this.depthMenu = null;
+                if (input.isConnected) input.focus({ preventScroll: true });
+            });
+            if (event) {
+                menu.showAtMouseEvent(event);
+            } else {
+                const tick = ticks.querySelector<HTMLElement>(`[data-depth="${depth}"]`);
+                const rect = (tick ?? control).getBoundingClientRect();
+                menu.showAtPosition({ x: rect.left + rect.width / 2, y: rect.bottom }, control.ownerDocument);
+            }
+        };
+        control.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const target = event.target instanceof Element ? event.target.closest<HTMLElement>(".roam-list-heading-depth-tick") : null;
+            const tickDepth = Number(target?.dataset.depth);
+            const depth = target && isListHeadingDepth(tickDepth) ? tickDepth : depthAtPointer(event.clientX);
+            if (isListHeadingDepth(depth)) showMenu(depth, event);
+        });
         input.addEventListener("input", () => {
             this.applyDepth(Number(input.value), true);
         });
         input.addEventListener("keydown", (event) => {
+            if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                event.preventDefault();
+                event.stopPropagation();
+                showMenu(this.depth);
+                return;
+            }
             const nextDepth = getKeyboardDepth(this.depth, event.key);
             if (nextDepth === null) return;
             event.preventDefault();
@@ -371,7 +482,8 @@ export class RoamListHeadingView extends ItemView {
         item: ListHeadingItem,
         foldKey: string,
         hasDescendants: boolean,
-        updateVisibility: () => void
+        updateVisibility: () => void,
+        updateButtons: (() => void)[]
     ): HTMLElement {
         const entry = parent.createDiv({ cls: "roam-list-heading-entry" });
         const itemEl = entry.createDiv({
@@ -402,17 +514,18 @@ export class RoamListHeadingView extends ItemView {
             });
             const updateButton = () => {
                 const collapsed = this.collapsedItems.has(foldKey);
+                if (foldButton.getAttr("aria-expanded") === String(!collapsed)) return;
                 foldButton.setAttr("aria-expanded", String(!collapsed));
                 foldButton.setAttr("aria-label", `${collapsed ? "Expand" : "Collapse"} children of ${item.title}`);
                 setIcon(foldButton, collapsed ? "chevron-right" : "chevron-down");
             };
             updateButton();
+            updateButtons.push(updateButton);
             foldButton.addEventListener("click", (event) => {
                 event.stopPropagation();
                 if (!this.collapsedItems.delete(foldKey)) {
                     this.collapsedItems.add(foldKey);
                 }
-                updateButton();
                 updateVisibility();
             });
         }

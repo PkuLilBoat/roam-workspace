@@ -229,7 +229,7 @@ try {
     await evaluate("(async()=>{const t=window.__journalSaveTest;await app.vault.delete(app.vault.getAbstractFileByPath(t.path));})()");
     await until("window.__journalSaveTest.controller.conflicts.has(window.__journalSaveTest.path)");
     await screenshot("deleted-draft-recovery");
-    await evaluate("document.querySelector('.journal-v2__conflict [data-conflict-action=restore]').click()");
+    await evaluate("(()=>{const t=window.__journalSaveTest;t.controller.cardList.getCard(t.path).rootEl.querySelector('[data-conflict-action=restore]').click()})()");
     await until("window.__journalSaveTest.controller.sessions.has(window.__journalSaveTest.path)&&!window.__journalSaveTest.controller.conflicts.has(window.__journalSaveTest.path)");
     await evaluate("window.__journalSaveTest.controller.sessions.get(window.__journalSaveTest.path).focus()");
     await send("Input.insertText", { text: " continues" });

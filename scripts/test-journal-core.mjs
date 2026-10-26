@@ -423,6 +423,8 @@ await build({
 
 const {
     collectListHeadingItems,
+    getListHeadingFoldTargets,
+    applyListHeadingDepthFold,
     getListHeadingDescendantEnds,
     getListHeadingItemKeys,
     parseListHeadingItems,
@@ -1507,6 +1509,9 @@ assert.deepEqual(
         showSourcePath: true,
         enableExportMarkdown: true,
         navigationViews: ["journal-stream"],
+        navigationConfiguration: { journalName: "Journal stream", journals: [], links: [] },
+        additionalJournalsCollapsed: true,
+        bookmarkGroupCollapsed: {},
         navigationSectionCollapsed: {
             bookmarks: false,
             recentFiles: false,
@@ -2786,6 +2791,31 @@ assert.deepEqual(
     },
     "Depth summary should report five actual relative levels and cumulative counts"
 );
+
+// Fold rank follows actual indentation depths, independently of the display filter.
+const batchItems = parseListHeadingItems("# Root\n- A\n\t- A1\n\t\t- A1a\n\t\t\t- A1leaf\n- B\n\t- B1\n## Section\n- C\n\t- C1\n# Tail");
+const batchKeys = getListHeadingItemKeys(batchItems);
+assert.deepEqual(getListHeadingFoldTargets(batchItems, 0), [0, 7]);
+assert.deepEqual(getListHeadingFoldTargets(batchItems, 1), [1, 5, 8]);
+assert.deepEqual(getListHeadingFoldTargets(batchItems, 2), [2]);
+assert.deepEqual(getListHeadingFoldTargets(batchItems, 3), [3]);
+assert.deepEqual(getListHeadingFoldTargets(batchItems, 4), []);
+assert.deepEqual(getListHeadingFoldTargets(batchItems, 5), []);
+assert.deepEqual(getListHeadingFoldTargets([], 0), []);
+assert.deepEqual(getListHeadingFoldTargets(parseListHeadingItems("# Root\n- ## List section\n- Child\n- ### Nested section\n- Leaf"), 0), [0, 1, 3], "Depth 0 targets every heading kind and level with descendants");
+const mixedFolds = new Set([batchKeys[0], batchKeys[2], batchKeys[3], batchKeys[5], batchKeys[7]]);
+const collapsedRank = applyListHeadingDepthFold(batchItems, batchKeys, mixedFolds, 1, true);
+assert.deepEqual([...collapsedRank].sort(), [...new Set([...mixedFolds, batchKeys[1], batchKeys[5], batchKeys[8]])].sort(), "Collapse must add only exact-rank parents and preserve other folds");
+assert.deepEqual(applyListHeadingDepthFold(batchItems, batchKeys, collapsedRank, 1, true), collapsedRank, "Collapse is deterministic in mixed states");
+const expandedRank = applyListHeadingDepthFold(batchItems, batchKeys, collapsedRank, 2, false);
+assert.deepEqual([...expandedRank].sort(), [batchKeys[3], batchKeys[5], batchKeys[7], batchKeys[8]].sort(), "Expand clears target and its ancestors, retaining descendant and other-branch folds");
+assert.deepEqual(mixedFolds.size, 5, "Bulk operations must not mutate their input state");
+assert.deepEqual([...applyListHeadingDepthFold(batchItems, batchKeys, collapsedRank, 0, false)].sort(), [batchKeys[1], batchKeys[2], batchKeys[3], batchKeys[5], batchKeys[8]].sort(), "Expand all headings must preserve list block folds");
+assert.deepEqual(applyListHeadingDepthFold(batchItems, batchKeys, collapsedRank, 5, false), collapsedRank, "A missing/leaf-only rank is a no-op");
+const sparseItems = parseListHeadingItems("# Root\n\t\t- Sparse parent\n\t\t\t\t- Sparse child\n\t\t\t\t\t- Leaf");
+assert.deepEqual(getListHeadingFoldTargets(sparseItems, 1), [1], "Rank 1 is shallowest actual depth, even when not indent 0");
+assert.deepEqual(getListHeadingFoldTargets(sparseItems, 2), [2]);
+assert.deepEqual(getListHeadingFoldTargets(parseListHeadingItems("# Root\n- Parent\n### Next heading\n- Child"), 1), [], "The next heading must never become a list parent's descendant");
 
 assert.deepEqual(getListHeadingDescendantEnds([]), [], "An empty outline has no subtrees");
 const mixedOutline = collectListHeadingItems("# Root\n- A\n### Section\n- B", 5);

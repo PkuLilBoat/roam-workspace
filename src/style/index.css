@@ -2053,3 +2053,166 @@
         width: 44px;
     }
 }
+
+/* Configured navigation entries inherit the existing native row metrics. */
+.roam-nav-view .roam-nav-journal-row {
+    align-items: center;
+    display: flex;
+    min-width: 0;
+}
+
+.roam-nav-view .roam-nav-journal-row > button.roam-nav-entry {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+}
+
+.roam-nav-view .roam-nav-journal-children,
+.roam-nav-view .roam-nav-bookmark-children {
+    padding-inline-start: 12px;
+}
+
+.roam-nav-view .roam-nav-bookmark-children {
+    border-inline-start: 1px solid var(--background-modifier-border);
+    margin-inline-start: var(--size-4-4);
+    padding-inline-start: 0;
+}
+
+.roam-nav-view .roam-nav-journal-children[hidden],
+.roam-nav-view .roam-nav-bookmark-children[hidden] {
+    display: none;
+}
+
+.roam-nav-view .roam-nav-journal-row .roam-nav-entry-label,
+.roam-nav-view .roam-nav-journal-children .roam-nav-entry-label,
+.roam-nav-view .roam-nav-bookmark-group-toggle .roam-nav-entry-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.roam-nav-view button.roam-nav-bookmark-group-toggle {
+    align-items: center;
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-s);
+    box-shadow: none;
+    color: var(--nav-item-color, var(--text-muted));
+    cursor: pointer;
+    display: flex;
+    gap: 8px;
+    font-family: var(--font-interface);
+    font-size: var(--font-ui-small);
+    font-weight: var(--font-normal);
+    min-height: 32px;
+    padding: 0 8px;
+    text-align: left;
+    width: 100%;
+}
+
+.roam-nav-view .roam-nav-bookmark-group-toggle svg {
+    height: 16px;
+    width: 16px;
+}
+
+.roam-nav-view button.roam-nav-bookmark-group-toggle,
+.roam-nav-view .roam-nav-bookmark-group-toggle .roam-nav-entry-label {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.roam-nav-view button.roam-nav-bookmark-group-toggle:hover {
+    background: var(--background-modifier-hover);
+}
+
+.roam-nav-view button.roam-nav-bookmark-group-toggle:focus-visible {
+    outline: 2px solid var(--interactive-accent);
+    outline-offset: -2px;
+}
+
+.roam-navigation-entry-editor .setting-item {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.roam-navigation-entry-editor .setting-item-control {
+    justify-content: flex-start;
+    width: 100%;
+}
+
+.modal .roam-navigation-entry-editor .setting-item-control input[type="text"] {
+    width: 100%;
+}
+
+.roam-navigation-entry-editor .setting-item:last-child .setting-item-control {
+    justify-content: flex-end;
+}
+
+.daily-note-settings-container .roam-navigation-configuration {
+    align-items: stretch;
+    flex-direction: column;
+}
+
+.daily-note-settings-container .roam-navigation-configuration .setting-item-control {
+    align-items: flex-start;
+    flex-direction: column;
+    width: 100%;
+}
+
+.daily-note-settings-container .roam-navigation-configuration textarea {
+    box-sizing: border-box;
+    font-family: var(--font-monospace);
+    min-height: 240px;
+    resize: vertical;
+    width: 100%;
+}
+
+.daily-note-settings-container .roam-navigation-configuration-help pre {
+    overflow-x: auto;
+}
+
+.daily-note-settings-container .roam-navigation-manager .setting-item-name {
+    align-items: center;
+    display: flex;
+    gap: var(--size-4-2);
+}
+
+.daily-note-settings-container .roam-navigation-manager .setting-item-control {
+    flex-wrap: wrap;
+    gap: var(--size-4-2);
+}
+
+.roam-navigation-manager-icon,
+.roam-navigation-icon-suggestion > span:first-child {
+    display: inline-flex;
+    flex: 0 0 var(--icon-s);
+}
+
+.roam-navigation-manager-icon svg,
+.roam-navigation-icon-suggestion svg {
+    height: var(--icon-s);
+    width: var(--icon-s);
+}
+
+.roam-navigation-icon-suggestion {
+    align-items: center;
+    display: flex;
+    gap: var(--size-4-2);
+}
+
+.roam-navigation-entry-editor .roam-navigation-validation {
+    color: var(--text-error);
+}
+
+.roam-navigation-entry-editor input[type="text"] {
+    max-width: 100%;
+}
+
+@media (pointer: coarse) {
+    .roam-nav-view button.roam-nav-bookmark-group-toggle {
+        min-height: 44px;
+    }
+}
