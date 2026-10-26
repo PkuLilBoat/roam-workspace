@@ -22,6 +22,10 @@ List Heading：按笔记中的真实列表层级导航。
 
 截图来自 Obsidian 1.14.4，使用 GitHub 0.1.0 发布版和隔离 TEST 库中的演示笔记。
 
+0.1.1 版本的导航、Journal 与 Page Stream，截图来自 Obsidian 1.14.4 隔离 TEST 库。
+
+![Roam Workspace 0.1.1](assets/screenshots/workspace-0.1.1.png)
+
 ## 功能
 
 - **Journal**：连续编辑日记或文件夹笔记，支持日期范围、排序、预设及 Markdown 导出。

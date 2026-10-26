@@ -22,6 +22,10 @@ List Heading: navigate the actual hierarchy of a note's nested lists.
 
 Captured in Obsidian 1.14.4 with the GitHub 0.1.0 release and sample notes in an isolated TEST vault.
 
+Updated navigation, Journal, and Page Stream in version 0.1.1, captured in the isolated TEST vault on Obsidian 1.14.4.
+
+![Roam Workspace 0.1.1](assets/screenshots/workspace-0.1.1.png)
+
 ## Features
 
 - **Journal**: continuous daily-note or folder editing, date ranges, sorting, presets, and Markdown export.

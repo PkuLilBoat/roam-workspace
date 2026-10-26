@@ -108,7 +108,7 @@ try {
     // Deterministic UI events exercise the real Obsidian controls; native input is checked separately.
     const modal="[document,app.setting.modalEl.ownerDocument].flatMap(d=>Array.from(d.querySelectorAll('.roam-navigation-entry-editor'))).find(e=>e.isConnected)";
     const fill=async fields=>evaluate(`(()=>{const m=${modal};if(!m)throw Error('No shortcut modal');for(const [label,value] of Object.entries(${JSON.stringify(fields)})){const input=m.querySelector('[aria-label="'+label+'"]');input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}})()`);
-    const save=()=>evaluate(`(()=>{const m=${modal};Array.from(m.querySelectorAll('button')).find(e=>e.textContent==='Save shortcut').click()})()`);
+    const save=async()=>{await evaluate(`(()=>{const m=${modal};Array.from(m.querySelectorAll('button')).find(e=>e.textContent==='Save shortcut').click()})()`);await until(`!(${modal})`);};
     const openSettings=async()=>{
         await evaluate("(async()=>{await app.setting.open();await app.setting.openTabById('roam-workspace');return null})()");
         await until("app.setting.activeTab.containerEl.querySelector('.roam-navigation-manager')");
@@ -138,7 +138,7 @@ try {
     await until(`${manual}?.textContent==='Renamed manual'`);
     await evaluate(`${manual}.dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true}))`);
     await contextItem('Change icon');await until(modal);
-    assert.equal(await evaluate(`(${modal}).querySelector('[aria-label="Shortcut icon"]').matches(':focus')`),true);
+    await until(`(${modal}).querySelector('[aria-label="Shortcut icon"]').matches(':focus')`);
     await fill({'Shortcut icon':'globe'});await save();
     await until(`app.plugins.plugins['roam-workspace'].settings.navigationConfiguration.links.find(x=>x.id===${JSON.stringify(manualId)}).icon==='globe'`);
     await openSettings();await until(row);
