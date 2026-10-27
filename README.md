@@ -8,7 +8,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Edit journals, connected pages, and recent activity in one Obsidian workspace. This repository contains the current local integration based on source commit `73dc52af342aa104e2e4db1849194a8a3f3aa6e6` (2026-10-18), replacing the older Roam In Ob snapshot.
+**Bring linked notes and outlining workflows into Obsidian.** If you work with Logseq, Roam Research, Orca Note, or [SiYuan](https://b3log.org/siyuan/), Roam Workspace brings a familiar way of working to your Obsidian vault: capture ideas in a journal, structure them in nested lists, connect related notes, and read or edit those notes side by side.
+
+Combine continuous journals, Page Stream, configurable navigation, grouped bookmarks, and enhanced list-outline navigation while keeping your notes as editable Markdown in Obsidian.
 
 ## Screenshots
 
@@ -30,8 +32,9 @@ Updated navigation, Journal, and Page Stream in version 0.1.1, captured in the i
 
 - **Journal**: continuous daily-note or folder editing, date ranges, sorting, presets, and Markdown export.
 - **Page Stream**: keep several connected pages together with embedded Markdown editors.
-- **Navigation**: recent files/tasks and filters in one panel.
-- **List Heading and Outliner**: compact heading/list navigation and scoped list editing.
+- **Configurable navigation**: add multiple Journal folders, note links, and website shortcuts; edit names, icons, visibility, and ordering in settings or from context menus. Advanced JSON configuration supports reusable setups.
+- **Grouped bookmarks**: browse Obsidian’s existing bookmark hierarchy, including nested groups, folders, and files, alongside recent-file and recent-task filters.
+- **Enhanced list outlines**: navigate headings and nested lists, use compact outline rows, and fold or expand an exact depth from the context menu. Scoped Outliner integration supports list editing.
 
 ## Metadata Menu integration
 
