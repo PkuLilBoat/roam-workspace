@@ -33,6 +33,18 @@ Updated navigation, Journal, and Page Stream in version 0.1.1, captured in the i
 - **Navigation**: recent files/tasks and filters in one panel.
 - **List Heading and Outliner**: compact heading/list navigation and scoped list editing.
 
+## Metadata Menu integration
+
+Roam Workspace works with [Metadata Menu](https://github.com/mdelobelle/metadatamenu) in the Navigation panel:
+
+- Display a note's FileClass icon in file rows.
+- Filter recent files by FileClass.
+- Click the icon beside a note to open Metadata Menu's field editor for notes with a FileClass, or its FileClass selection action for notes without one. If a targeted action cannot be resolved, the integration falls back to Metadata Menu's context menu.
+
+Install and enable both plugins in the same vault, configure your FileClasses in Metadata Menu, and wait for its indexing to finish. Then open **Roam Workspace: Open roam navigation**.
+
+**Compatibility:** the current adapter targets Metadata Menu **0.8.12** and checks its version and readiness before enabling these features. Other versions are not currently enabled by the adapter. Metadata Menu is optional: without a compatible, ready installation, Roam Workspace uses a standard file icon and opens the note's native properties instead. This integration uses Metadata Menu's existing classes and field editor; configure field definitions in Metadata Menu.
+
 ## Install
 
 Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/PkuLilBoat/roam-workspace/releases/latest). Put all three files directly in `<vault>/<configDir>/plugins/roam-workspace/` (`configDir` is usually `.obsidian`). Reload Obsidian, allow community plugins if needed, and enable **Roam Workspace**. Source ZIP downloads do not contain `main.js`.

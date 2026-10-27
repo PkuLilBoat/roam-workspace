@@ -33,6 +33,18 @@ List Heading：按笔记中的真实列表层级导航。
 - **Navigation**：集中查看近期文件、近期任务和筛选条件。
 - **List Heading 与 Outliner**：紧凑的大纲导航和限定范围的列表编辑。
 
+## Metadata Menu 联动
+
+Roam Workspace 可与 [Metadata Menu](https://github.com/mdelobelle/metadatamenu) 联动，在 Navigation 导航面板中：
+
+- 在文件行显示笔记对应的 FileClass 图标。
+- 按 FileClass 筛选近期文件。
+- 点击笔记旁的图标：已有 FileClass 时打开 Metadata Menu 的字段编辑窗口；尚未分配时调用其 FileClass 选择入口。无法定位具体操作时，回退到 Metadata Menu 的原生上下文菜单。
+
+在同一个库中安装并启用两个插件，在 Metadata Menu 中配置 FileClass，等待其索引完成，再打开 **Roam Workspace: Open roam navigation**。
+
+**兼容范围：**当前适配器针对 Metadata Menu **0.8.12**，启用联动前会检查版本和就绪状态；其他版本目前不会启用这些适配能力。Metadata Menu 为可选插件：未安装、版本不匹配或尚未就绪时，Roam Workspace 使用普通文件图标，并打开笔记的原生属性区域。联动使用 Metadata Menu 已有的分类与字段编辑功能，字段定义仍在 Metadata Menu 中配置。
+
 ## 安装
 
 从 [最新发布页](https://github.com/PkuLilBoat/roam-workspace/releases/latest) 下载 `main.js`、`manifest.json`、`styles.css`，直接放进 `<库>/<配置目录>/plugins/roam-workspace/`，配置目录通常是 `.obsidian`。重载 Obsidian，必要时允许使用第三方插件，在设置中启用 **Roam Workspace**。源码 ZIP 不包含 `main.js`。
